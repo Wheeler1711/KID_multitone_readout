@@ -6,6 +6,7 @@ import qsghw.misc.windows as windows
 import qsghw.core.packetparser as packetparser
 import time
 from instruments import hp83732a as hp
+from instruments import weinchel8310 as weinchel
 
 class readout(object):
 
@@ -37,6 +38,7 @@ class readout(object):
         self.lo.set_frequency(self.lo_freq)
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
+        self.input_attenuator = weinchel.attenuator() #input to detectors, output of fpga
         
 
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
@@ -104,8 +106,40 @@ class readout(object):
         print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
         print()
 
-    def set_frequencies(self,frequencies,amplitude):
-        self.real_freq_list = self.wfplayer.set_tone_list(self.group, frequencies, write=True, amp=amplitude)
+    def set_frequencies(self,frequencies,amplitude,random_phase = True,fill_DAQ_range = True):
+        '''
+        set frequencies
+        a lot of this should probably be migrated into the wfplayer class
+        '''
+        if np.isscalar(amplitude): # supplying array or of amplitudes?
+            amplitude = np.ones(len(frequencies))*amplitude
+        if random_phase:
+            np.random.seed()
+            phase = np.random.uniform(0., 360, len(frequencies))
+        else:
+            phase = np.zeros(len(frequencies))
+            
+        self.real_freq_list = []
+        self.wfplayer.del_tone(groupid = self.group)
+        for i in range(0,len(frequencies)):
+            self.wfplayer.set_tone(self.group,i,frequencies[i],phase[i],phase[i],amplitude[i],amplitude[i])
+            self.real_freq_list.append(self.wfplayer.get_tone(self.group,i)[0])
+
+        self.wfplayer.write_tone_list()
+        
+        if fill_DAQ_range: # this is ineffecient currently writing tones to board twice
+            maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
+            scale_factor = (0.8*(2**16//2-1))/maximum_of_wave 
+            amplitude = amplitude*scale_factor
+            self.real_freq_list = []
+            self.wfplayer.del_tone(groupid = self.group)
+            for i in range(0,len(frequencies)):
+                self.wfplayer.set_tone(self.group,i,frequencies[i],phase[i],phase[i],amplitude[i],amplitude[i])
+                self.real_freq_list.append(self.wfplayer.get_tone(self.group,i)[0])
+            self.wfplayer.write_tone_list()
+            
+        # old way with list 
+        #self.real_freq_list = self.wfplayer.set_tone_list(self.group, frequencies, write=True, amp=amplitude)
         self.chanlist = self.frontend.set_chan_list(self.group, self.real_freq_list, write=True)
         self.binnolist = [ self.frontend.get_chan(self.group, i)[1] for i in self.chanlist ]
 
@@ -164,8 +198,9 @@ class readout(object):
         
         iq_sweep_freqs = np.linspace(self.lo_freq-tone_spacing/2,self.lo_freq+tone_spacing/2,npts)        
 
-        print("merge = "+str(512//n_tones))
-        self.frontend.change_output(self.output, 512//n_tones, self.decimate)
+        self.merge = 512//n_tones
+        print("merge = "+str(self.merge))
+        self.frontend.change_output(self.output, self.merge, self.decimate)
         self.set_frequencies(self.frequencies,amplitude = 0.8/n_tones)
         
         self.vna_freqs = np.asarray(())
@@ -179,8 +214,9 @@ class readout(object):
         for n, freq in enumerate(iq_sweep_freqs):
             self.lo.set_frequency(freq)
             time.sleep(0.01)
-            self.lo.get_frequency()
-            alldata_array = self.get_data(to_read)
+            curr_freq = self.lo.get_frequency()
+            print(str(curr_freq/10**6)+" MHz")
+            alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
@@ -199,12 +235,12 @@ class readout(object):
         
 
 
-    def get_data(self,to_read):
+    def get_data(self,to_read,verbose= True):
         self.dataif.reset()
         (nbytes,buffer) = self.dataif.readall(to_read)
         
         (headeroffsets, payloadoffsets, payloadlengths, seqnos) = packetparser.findlongestcontinuous(buffer, incr=1024)
-        (consumed, alldata) = packetparser.parsemany(buffer, headeroffsets[0], payloadoffsets, verbose = True)
+        (consumed, alldata) = packetparser.parsemany(buffer, headeroffsets[0], payloadoffsets, verbose = verbose)
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
         alldata_array = alldata.data['i']+1j*alldata.data['q']
         return alldata_array
@@ -213,3 +249,35 @@ class readout(object):
     def close(self):
         self.dataif.close()
         self.ctrlif.close()
+
+
+    def get_ADC_wave(self):
+        # frontend output selection                                                                                             
+        #print("frontend output = %s   merge = %3d   decimate = %3d" % (self.output, self.merge, self.decimate))
+        self.frontend.write_monstop(1)
+        self.frontend.change_output("INPUT", 1, 8193)
+        # not frontend, but anyways: program and reset circbuffer                                                               
+        self.circb.write_packetsize(self.pktsize)
+        self.circb.write_bufspace(0) # 0 => maximum supported                                                                   
+        self.circb.reset()
+        print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
+        # reset every frontend block, restart flow                                                                              
+        self.frontend.write_rstall(1)
+        self.frontend.write_rstall(0)
+        self.frontend.write_monstop(0)
+
+        time.sleep(1)
+        self.adc_wave = self.get_data(32*1024)
+        self.adc_wave = self.adc_wave[0,:]
+        # change back to normal operation
+        self.frontend.write_monstop(1)
+        self.frontend.change_output(self.output, self.merge, self.decimate)
+        # not frontend, but anyways: program and reset circbuffer
+        self.circb.write_packetsize(self.pktsize)
+        self.circb.write_bufspace(0) # 0 => maximum supported                                                                   
+        self.circb.reset()
+        print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
+        # reset every frontend block, restart flow
+        self.frontend.write_rstall(1)
+        self.frontend.write_rstall(0)
+        self.frontend.write_monstop(0)
