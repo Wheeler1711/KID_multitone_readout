@@ -7,6 +7,12 @@ import qsghw.core.packetparser as packetparser
 import time
 from instruments import hp83732a as hp
 from instruments import weinchel8310 as weinchel
+import resonator_class as res_class
+from KIDs import find_resonances_interactive as find_res
+import os
+import data_io as data_io
+import glob
+from tqdm import tqdm
 
 class readout(object):
 
@@ -39,8 +45,16 @@ class readout(object):
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
         self.input_attenuator = weinchel.attenuator() #input to detectors, output of fpga
-        
+        self.res_class = res_class.resonators_class([])
+        self.vna_data = None
+        self.data_dir = "~/multitone_data"
+        self.data_dir = os.path.expanduser(self.data_dir)
+        print(self.data_dir)
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
+        self.vna_save_filename = "vna_sweep.csv"
 
+        
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
 
@@ -231,6 +245,38 @@ class readout(object):
         plt.ylabel("Power dB")
         plt.title("VNA Sweep")
         plt.show()
+
+    def save_vna_data(self):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_"+self.vna_save_filename
+        data_io.write_vna_data(save_filename,self.vna_freqs,self.vna_data)
+
+    def load_vna_data(self,filename = None):
+        if not filename: # look for most recent file
+            list_of_files = glob.glob(self.data_dir+'/*'+self.vna_save_filename)
+            latest_file = max(list_of_files, key=os.path.getctime)
+            self.vna_freqs,self.vna_data = data_io.read_vna_data(latest_file)
+        else:
+            try:
+                self.vna_freqs,self.vna_data = data_io.read_vna_data(filename)
+            except:
+                print("could not read file: "+filename)
+                if not os.path.exists(filename):
+                    print(filename+" does not seem to exist")
+
+    def find_kids(self):
+        if list(self.vna_data): #pythonic booleaness of list/None does not work on np.arrays() 
+            if len(self.res_class.resonators)==0: #first time finding resonators
+                ip = find_res.find_vna_sweep(self.vna_freqs,self.vna_data)
+                for m in range(len(ip.kid_idx)):
+                    self.res_class.resonators.append(res_class.resonator(ip.chan_freqs[ip.kid_idx[m]],
+                                                                                use = True))
+                    self.res_class.resonators[m].flags = ip.flags[m]
+            else:
+                print("please write code to handle retunning from vna")
+                        
+        else:
+            print("No VNA data found")
             
         
 
