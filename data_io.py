@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from tqdm import tqdm
+import pickle
 
 vna_header = "# Header:freq_Hz,real,imag"
 
@@ -27,4 +28,37 @@ def read_vna_data(input_filename):
             imag.append(float(split[2]))
             
     return np.asarray(freqs),np.asarray(real+1j*np.asarray(imag))
+            
+def write_iq_sweep_data(output_filename,freqs,z,meta_data = None):
+    iq_dict = {"freqs":freqs,"z":z}
+    file_to_write = open(output_filename, "wb")
+    pickle.dump(iq_dict, file_to_write)
+
+def read_iq_sweep_data(input_filename):
+    with open(input_filename, 'rb') as f:
+        data = pickle.load(f)
+    return data['freqs'],data['z']
+
+def write_stream_data(output_filename,freqs,z,meta_data = None):
+    stream_dict = {"freqs":freqs,"z":z}
+    file_to_write = open(output_filename, "wb")
+    pickle.dump(stream_dict, file_to_write)
+
+def read_stream_data(input_filename):
+    with open(input_filename, 'rb') as f:
+        data = pickle.load(f)
+    return data['freqs'],data['z']
+
+def write_filename_set(output_filename,filenames):
+    with open(output_filename,'w') as f:
+        for filename in filenames:
+            f.write(filename+"\n")
+
+def read_filename_set(input_filename):
+    filenames = []
+    with open(input_filename,'w') as f:
+        raw_lines = [raw_line.strip() for raw_line in f.readlines()]
+        for line in raw_lines:
+            filenames.append(line)
+    return filenames
             

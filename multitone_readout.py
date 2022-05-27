@@ -14,6 +14,7 @@ import os
 import data_io as data_io
 import glob
 from tqdm import tqdm
+from scipy import signal
 yeses = ['yes','y']
 
 class readout(object):
@@ -47,15 +48,18 @@ class readout(object):
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
         self.input_attenuator = weinchel.attenuator() #input to detectors, output of fpga
+        self.output_attenuator = weinchel.attenuator('GPIB0::8::INSTR')
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
+        self.stream_data = None
         self.data_dir = "~/multitone_data"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
         self.vna_save_filename = "vna_sweep.csv"
-
+        self.iq_sweep_save_filename = "iq_sweep.p"
+        self.stream_save_filename = "stream.p"
         
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
@@ -122,6 +126,18 @@ class readout(object):
         print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
         print()
 
+    def variables(self):
+        print("readout object's variables")
+        for key in self.__dict__.keys():
+            if isinstance(self.__dict__[key],np.ndarray):
+                print(key,"numpy array with shape ",self.__dict__[key].shape)
+            elif isinstance(self.__dict__[key],list):
+                print(key,"list of length",len(self.__dict__[key]))
+            elif key == 'res_class':
+                print(key,"Resonator class with len ",len(self.__dict__[key].resonators))
+            else:
+                print(key,self.__dict__[key])
+
     def set_frequencies(self,frequencies,amplitude,random_phase = True,fill_DAQ_range = True):
         '''
         set frequencies
@@ -141,7 +157,7 @@ class readout(object):
         
         
         n_tones = len(frequencies)
-        self.merge = 512//n_tones
+        self.merge = 512//n_tones #how many samples in a packet
         print("merge = "+str(self.merge))
         self.frontend.change_output(self.output, self.merge, self.decimate)
         self.real_freq_list = []
@@ -177,7 +193,7 @@ class readout(object):
         print()
 
 
-    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0):
+    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True):
         to_read = int(1024*average) # at some point should turn this into an integration time
         self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
         self.iq_sweep_freqs = np.zeros((npts,len(self.real_freq_list)))
@@ -186,11 +202,13 @@ class readout(object):
         self.iq_sweep_data = np.zeros((len(self.iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
         for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts):
             self.lo.set_frequency(freq)
-            time.sleep(0.01)
+            time.sleep(0.1)
             self.lo.get_frequency()
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
+        if plot:
+            self.plot_iq_sweep()
 
     def plot_iq_sweep(self):
         if self.iq_sweep_data is not None:
@@ -259,6 +277,33 @@ class readout(object):
         for m in range(0,len(self.real_freq_list)):
             self.vna_data = np.append(self.vna_data,iq_sweep_data[:,m])
 
+
+
+    def get_stream_data(self,stream_len= 1024*1024*1024):
+        self.lo.set_frequency(self.lo_freq) #make sure LO is back at nominal frequency
+        time.sleep(0.1)
+        self.stream_data = self.get_data(stream_len,verbose = False)
+        self.stream_frequencies = [freq + self.lo_freq for freq in self.real_freq_list]
+
+    def plot_iq_and_stream(self,decimate = 1000):#eventualy decimate -> frequency
+        # decimate only handels 1 sig fig i.e 2000 no 2500
+        if self.stream_data is not None:
+            if self.iq_sweep_data is not None:
+                self.decimated_stream_data = self.stream_data #need deep copy?
+                factors_of_10 = int(np.floor(np.log10(decimate)))
+                for k in range(0,factors_of_10):
+                    self.decimated_stream_data = signal.decimate(self.decimated_stream_data,10,axis = 0)
+                self.decimated_stream_data = signal.decimate(self.decimated_stream_data,
+                                                             decimate//(10**factors_of_10),axis =0)
+                    
+                ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,
+                                                      stream_data = self.decimated_stream_data,retune = False)
+            else:
+                print("No IQ sweep data found: unable to plot")
+        else:
+            print("No stream data found: unable to plot")
+        
+        
     def plot_vna_sweep(self):
         plt.figure(1)
         plt.plot(self.vna_freqs/10**6,20*np.log10(np.abs(self.vna_data)))
@@ -284,7 +329,51 @@ class readout(object):
                 print("could not read file: "+filename)
                 if not os.path.exists(filename):
                     print(filename+" does not seem to exist")
+                else:
+                    print("error with file "+filename)
 
+    def save_iq_data(self):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_"+self.iq_sweep_save_filename
+        data_io.write_iq_sweep_data(save_filename,self.iq_sweep_freqs,self.iq_sweep_data)
+        return save_filename
+        
+    def load_iq_data(self,filename = None):
+        if not filename:
+            list_of_files = glob.glob(self.data_dir+'/*'+self.iq_sweep_save_filename)
+            latest_file = max(list_of_files, key=os.path.getctime)
+            self.iq_sweep_freqs,self.iq_sweep_data = data_io.read_iq_sweep_data(latest_file)
+        else:
+            try:
+                self.vna_freqs,self.vna_data = data_io.read_iq_sweep_data(filename)
+            except:
+                print("could not read file: "+filename)
+                if not os.path.exists(filename):
+                    print(filename+" does not seem to exist")
+                else:
+                    print("error with file "+filename)
+
+    def save_stream_data(self):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_"+self.stream_save_filename
+        data_io.write_stream_data(save_filename,self.stream_frequencies,self.stream_data)
+        return save_filename
+
+    def load_stream_data(self,filename = None):
+        if not filename:
+            list_of_files = glob.glob(self.data_dir+'/*'+self.stream_save_filename)
+            latest_file = max(list_of_files, key=os.path.getctime)
+            self.stream_freqs,self.stream_data = data_io.read_stream_data(latest_file)
+        else:
+            try:
+                self.stream_frequencies,self.stream_data = data_io.read_stream_data(filename)
+            except:
+                print("could not read file: "+filename)
+                if not os.path.exists(filename):
+                    print(filename+" does not seem to exist")
+                else:
+                    print("error with file "+filename)
+                    
     def find_kids(self):
         if list(self.vna_data): #pythonic booleaness of list/None does not work on np.arrays() 
             if len(self.res_class.resonators)==0: #first time finding resonators
@@ -303,7 +392,6 @@ class readout(object):
     def get_data(self,to_read,verbose= True):
         self.dataif.reset()
         (nbytes,buffer) = self.dataif.readall(to_read)
-        
         (headeroffsets, payloadoffsets, payloadlengths, seqnos) = packetparser.findlongestcontinuous(buffer, incr=1024)
         (consumed, alldata) = packetparser.parsemany(buffer, headeroffsets[0], payloadoffsets, verbose = verbose)
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
@@ -373,3 +461,25 @@ class readout(object):
                 print("Leaving resonator on")
                 resonator.use = True
                 last_active_frequency = resonator.frequency
+
+    def take_noise_set(self,gain_span = 1e6,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True):
+        filenames = []
+        print("taking gain sweep")
+        self.iq_sweep(gain_span,plot = False)
+        filenames.append(self.save_iq_data())
+        print("taking fine sweep")
+        self.iq_sweep(fine_span,plot = False)
+        filenames.append(self.save_iq_data())
+        print("taking streaming data")
+        self.get_stream_data(stream_len)
+        filenames.append(self.save_stream_data())
+        self.save_noise_set_filenames(filenames)
+        if plot:
+            self.plot_iq_and_stream()
+        
+
+    def save_noise_set_filenames(self,filenames):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_noise_set_filenames.txt"
+        data_io.write_filename_set(save_filename,filenames)
+        

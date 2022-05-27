@@ -29,12 +29,13 @@ def find_max_didq(z, look_around):
 
 class interactive_plot(object):
 
-    def __init__(self, chan_freqs, z, look_around=2, retune=True, find_min=True):
+    def __init__(self, chan_freqs, z, look_around=2,stream_data = None, retune=True, find_min=True):
         self.find_min = find_min
         self.retune = retune
         self.Is = np.real(z)
         self.Qs = np.imag(z)
         self.z = z
+        self.stream_data = stream_data
         self.chan_freqs = chan_freqs
         self.targ_size = chan_freqs.shape[0]
         self.look_around = look_around
@@ -58,6 +59,9 @@ class interactive_plot(object):
         self.fig.canvas.mpl_connect('key_press_event', self.on_key_press)
         self.fig.canvas.mpl_connect('key_release_event', self.on_key_release)
         self.fig.canvas.mpl_connect('button_press_event', self.onClick)
+        if self.stream_data is not None:
+            self.s2, = self.ax2.plot(np.real(self.stream_data[:, self.plot_index]),
+                                     np.imag(self.stream_data[:, self.plot_index]), '.')
         self.l1, = self.ax.plot(self.chan_freqs[:, self.plot_index]/10**6, 10*np.log10(
             self.Is[:, self.plot_index]**2+self.Qs[:, self.plot_index]**2), '-o',mec = "k")
         self.l2, = self.ax2.plot(
@@ -68,6 +72,7 @@ class interactive_plot(object):
                                                 self.Qs[self.min_index[self.plot_index], self.plot_index]**2), '*', markersize=15)
             self.p2, = self.ax2.plot(self.Is[self.min_index[self.plot_index], self.plot_index],
                                      self.Qs[self.min_index[self.plot_index], self.plot_index], '*', markersize=15)
+            
         self.ax.set_title("Resonator Index "+str(self.plot_index))
         if self.retune:
             self.ax2.set_title("Look Around Points "+str(self.look_around))
@@ -94,6 +99,7 @@ class interactive_plot(object):
                 self.p1.set_data(self.chan_freqs[self.min_index[self.plot_index], self.plot_index]/10**6,
                                  10*np.log10(self.Is[self.min_index[self.plot_index], self.plot_index]**2 +
                                              self.Qs[self.min_index[self.plot_index], self.plot_index]**2))
+                    
         self.ax.relim()
         self.ax.autoscale()
         self.ax.set_title("Resonator Index "+str(self.plot_index))
@@ -108,6 +114,10 @@ class interactive_plot(object):
             else:
                 self.p2.set_data(self.Is[self.min_index[self.plot_index], self.plot_index],
                                  self.Qs[self.min_index[self.plot_index], self.plot_index])
+
+        if self.stream_data is not None:
+            self.s2.set_data(np.real(self.stream_data[:, self.plot_index]),
+                                 np.imag(self.stream_data[:, self.plot_index]))
         self.ax2.relim()
         self.ax2.autoscale()
         plt.draw()
@@ -165,7 +175,7 @@ class interactive_plot(object):
                     replace_index = np.argwhere(
                         self.res_index_overide == self.plot_index)[0][0]
                     new_freq = np.argmin(
-                        np.abs(event.xdata-self.chan_freqs[:, self.plot_index]))
+                        np.abs(event.xdata-self.chan_freqs[:, self.plot_index]/10**6))
                     self.overide_freq_index[replace_index] = np.int(new_freq)
 
                 else:
@@ -173,7 +183,7 @@ class interactive_plot(object):
                         self.res_index_overide, np.int(np.asarray(self.plot_index)))
                     # print(self.res_index_overide)
                     new_freq = np.argmin(
-                        np.abs(event.xdata-self.chan_freqs[:, self.plot_index]))
+                        np.abs(event.xdata-self.chan_freqs[:, self.plot_index]/10**6))
                     #print("new index is ",new_freq)
                     self.overide_freq_index = np.append(
                         self.overide_freq_index, np.int(np.asarray(new_freq)))
