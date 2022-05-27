@@ -17,3 +17,11 @@ class resonator: # not plural
 @dataclass()
 class resonators_class: # plural
     resonators: List[resonator]
+
+    def len_use_true(self):
+        count = 0
+        for resonator in self.resonators:
+            if resonator.use == True:
+                count += 1
+
+        return count

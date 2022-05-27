@@ -9,10 +9,12 @@ from instruments import hp83732a as hp
 from instruments import weinchel8310 as weinchel
 import resonator_class as res_class
 from KIDs import find_resonances_interactive as find_res
+import tune_resonators as tune_resonators
 import os
 import data_io as data_io
 import glob
 from tqdm import tqdm
+yeses = ['yes','y']
 
 class readout(object):
 
@@ -125,6 +127,10 @@ class readout(object):
         set frequencies
         a lot of this should probably be migrated into the wfplayer class
         '''
+        try:
+            len(frequencies)
+        except:
+            frequencies = [frequencies]
         if np.isscalar(amplitude): # supplying array or of amplitudes?
             amplitude = np.ones(len(frequencies))*amplitude
         if random_phase:
@@ -132,7 +138,12 @@ class readout(object):
             phase = np.random.uniform(0., 360, len(frequencies))
         else:
             phase = np.zeros(len(frequencies))
-            
+        
+        
+        n_tones = len(frequencies)
+        self.merge = 512//n_tones
+        print("merge = "+str(self.merge))
+        self.frontend.change_output(self.output, self.merge, self.decimate)
         self.real_freq_list = []
         self.wfplayer.del_tone(groupid = self.group)
         for i in range(0,len(frequencies)):
@@ -168,34 +179,49 @@ class readout(object):
 
     def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0):
         to_read = int(1024*average) # at some point should turn this into an integration time
-        self.iq_sweep_freqs = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
+        self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
+        self.iq_sweep_freqs = np.zeros((npts,len(self.real_freq_list)))
+        for m in range(0,len(self.real_freq_list)):
+            self.iq_sweep_freqs[:,m] = self.iq_sweep_freqs_lo+self.real_freq_list[m]
         self.iq_sweep_data = np.zeros((len(self.iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
-        for n, freq in enumerate(self.iq_sweep_freqs):
+        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts):
             self.lo.set_frequency(freq)
             time.sleep(0.01)
             self.lo.get_frequency()
-            alldata_array = self.get_data(to_read)
+            alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
     def plot_iq_sweep(self):
         if self.iq_sweep_data is not None:
-            for m in range(0,self.iq_sweep_data.shape[1]):
-                plt.figure(m+1)
-                plt.plot(np.real(self.iq_sweep_data[:,m]),np.imag(self.iq_sweep_data[:,m]),'-o',mec = "k")
-                plt.xlabel("I")
-                plt.ylabel("Q")
-                plt.axis('equal')
-                plt.title("Resonator "+str(m)+" Frequency "+str((self.lo_freq+self.real_freq_list[m])/10**6)+"MHz")
-                plt.figure(-1-m)
-                plt.plot(self.iq_sweep_freqs/10**6.20*np.log10(np.abs(self.iq_sweep_data[:,m])),'-o',mec = "k")
-                plt.xlabel("Frequency (MHz)")
-                plt.ylabel("Power (dB)")
-                plt.title("Resonator "+str(m)+" Frequency "+str((self.lo_freq+self.real_freq_list[m])/10**6)+"MHz")
-            plt.show()
+            ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False)        
         else:
             print("No IQ sweep data found: unable to plot")
-                
+
+    def retune_resonators(self,find_min = False,write_resonator_tones = True):
+        if self.res_class.len_use_true() != self.iq_sweep_data.shape[1]:
+            print("number of resonators in iq data does not match number of currently"+\
+                  "active resonator cannot retune because iq information is ambiguouse")
+            return
+            # could allow this if I do some matching to figure out what is what
+        #    confirmation = input("number of resonators in iq data does not match"+\
+        #                         "number of currently active resonators: Proceed? y/n")
+        #    if confirmation in yeses: #should I allow this
+        #        pass 
+        #    else:
+        #        return
+        new_frequencies = tune_resonators.tune_kids(self.iq_sweep_freqs,self.iq_sweep_data,find_min = find_min)
+        if self.res_class.len_use_true() == self.iq_sweep_data.shape[1]:
+            # change freqeuncies in resonator class
+            new_frequencies_index = 0
+            for resonator in self.res_class.resonators:
+                if resonator.use:
+                    resonator.frequency = new_frequencies[new_frequencies_index]
+                    new_frequencies_index += 1
+        if write_resonator_tones:
+            self.write_resonator_tones()
+            
+            
 
     def vna_sweep(self,span,resolution = 1*10**3,average = 1024*10):
         '''
@@ -212,18 +238,13 @@ class readout(object):
         
         iq_sweep_freqs = np.linspace(self.lo_freq-tone_spacing/2,self.lo_freq+tone_spacing/2,npts)        
 
-        self.merge = 512//n_tones
-        print("merge = "+str(self.merge))
-        self.frontend.change_output(self.output, self.merge, self.decimate)
         self.set_frequencies(self.frequencies,amplitude = 0.8/n_tones)
         
         self.vna_freqs = np.asarray(())
         for m in range(0,len(self.real_freq_list)):
             self.vna_freqs = np.append(self.vna_freqs,self.real_freq_list[m]+iq_sweep_freqs)
 
-
-        to_read = int(1024*average) # at some point should turn this into an integration time                                   
-        
+        to_read = int(1024*average) # at some point should turn this into an integration time                                           
         iq_sweep_data = np.zeros((len(iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
         for n, freq in enumerate(iq_sweep_freqs):
             self.lo.set_frequency(freq)
@@ -270,7 +291,7 @@ class readout(object):
                 ip = find_res.find_vna_sweep(self.vna_freqs,self.vna_data)
                 for m in range(len(ip.kid_idx)):
                     self.res_class.resonators.append(res_class.resonator(ip.chan_freqs[ip.kid_idx[m]],
-                                                                                use = True))
+                                                                         use = True))
                     self.res_class.resonators[m].flags = ip.flags[m]
             else:
                 print("please write code to handle retunning from vna")
@@ -278,8 +299,6 @@ class readout(object):
         else:
             print("No VNA data found")
             
-        
-
 
     def get_data(self,to_read,verbose= True):
         self.dataif.reset()
@@ -327,3 +346,30 @@ class readout(object):
         self.frontend.write_rstall(1)
         self.frontend.write_rstall(0)
         self.frontend.write_monstop(0)
+
+
+    def write_resonator_tones(self):
+        frequencies = []
+        for m in range(len(self.res_class.resonators)):
+            if self.res_class.resonators[m].use == True:
+                frequencies.append(self.res_class.resonators[m].frequency-self.lo_freq)
+
+        self.set_frequencies(frequencies,0.8)
+
+    def mask_by_separation(self,required_separation):
+        '''
+        turn off tones that are too close together
+        '''
+        last_active_frequency = None
+        for resonator in sorted(self.res_class.resonators):
+            if not last_active_frequency:#handle first res
+                print("First resonator")
+                last_active_frequency = sorted(self.res_class.resonators)[0].frequency
+                resonator.use = True
+            elif resonator.frequency<last_active_frequency+required_separation:
+                print("Turning resonator off")
+                resonator.use = False
+            else:
+                print("Leaving resonator on")
+                resonator.use = True
+                last_active_frequency = resonator.frequency
