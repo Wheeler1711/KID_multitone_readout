@@ -2,6 +2,8 @@ import os
 import numpy as np
 from tqdm import tqdm
 import pickle
+from dataclasses import fields
+import resonator_class as resonator_class
 
 vna_header = "# Header:freq_Hz,real,imag"
 
@@ -49,16 +51,83 @@ def read_stream_data(input_filename):
         data = pickle.load(f)
     return data['freqs'],data['z']
 
-def write_filename_set(output_filename,filenames):
+def write_filename_set(output_filename,filenames,value_list_1 = None):
     with open(output_filename,'w') as f:
-        for filename in filenames:
-            f.write(filename+"\n")
+        for k,filename in enumerate(filenames):
+            if value_list_1 is not None:
+                f.write(filename+","+str(value_list_1[k])+"\n")
+            else:
+                f.write(filename+"\n")
 
 def read_filename_set(input_filename):
     filenames = []
+    value_list_1 = []
     with open(input_filename,'w') as f:
         raw_lines = [raw_line.strip() for raw_line in f.readlines()]
         for line in raw_lines:
-            filenames.append(line)
-    return filenames
+            if len(line.split(","))>1:
+                filenames.append(line.split(",")[0])
+                value_list_1.append(line.split(",")[1])
+            else:
+                filenames.append(line)
+    if len(value_list_1)>0:
+        return filenames,value_list_1
+    else:
+        return filenames
             
+
+def write_resonators_class(output_filename,res_class):
+    with open(output_filename,'w') as f:
+        # write header
+        line = "#"
+        for field in fields(res_class.resonators[0]):
+            line += field.name+","
+        line = line[:-1] # strip last comma
+        f.write(line+"\n")
+        for resonator in res_class.resonators:
+            line = ""
+            for field in fields(resonator):
+                field_str = str(getattr(resonator,field.name))
+                if "," in field_str: #handle list of flags
+                    field_str = field_str.replace(",","|")
+                    field_str = field_str.replace(" ","")
+                line += field_str+","
+            line = line[:-1] # strip last comma
+            f.write(line+"\n")
+
+def read_resonators_class(input_filename):
+    res_class = resonator_class.resonators_class([])
+    with open(input_filename,'r') as f:
+        print("hello")
+        raw_lines = [raw_line.strip() for raw_line in f.readlines()]
+        print(raw_lines)
+        for line in raw_lines:
+            print(line)
+            if line[0] == "#": #header:
+                field_names = []
+                split = line[1:].split(",")
+                for split in line[1:].split(","):
+                    field_names.append(split)
+            else:
+                split = line.split(",")
+                res_class.resonators.append(resonator_class.resonator(split[0]))# frequency required
+                for k,field in enumerate(fields(res_class.resonators[-1])):
+                    if 'float' in str(field.type):
+                        setattr(res_class.resonators[-1],field.name,float(split[k])) 
+                    elif 'bool' in str(field.type):
+                        if split[k] == "True":
+                            setattr(res_class.resonators[-1],field.name,True)
+                        else:
+                            setattr(res_class.resonators[-1],field.name,False)
+                    elif 'List' in str(field.type):
+                        list_str = split[k].replace("|",",")
+                        #print(list_str)
+                        list_of_strings = []
+                        if "," in list_str:
+                            for string in list_str[1:-1].split(","):# strip brackets
+                                list_of_strings.append(string[1:-1])# strip '
+                                #print(list_of_strings)
+                        setattr(res_class.resonators[-1],field.name,list_of_strings)
+                    else:
+                        print("type "+str(field.type)+ " not recognized")
+    return res_class

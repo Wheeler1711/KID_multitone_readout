@@ -9,6 +9,7 @@ from instruments import hp83732a as hp
 from instruments import weinchel8310 as weinchel
 import resonator_class as res_class
 from KIDs import find_resonances_interactive as find_res
+from KIDs import calibrate as cal
 import tune_resonators as tune_resonators
 import os
 import data_io as data_io
@@ -51,6 +52,7 @@ class readout(object):
         self.output_attenuator = weinchel.attenuator('GPIB0::8::INSTR')
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
+        self.tau = 66*10**-9
         self.stream_data = None
         self.data_dir = "~/multitone_data"
         self.data_dir = os.path.expanduser(self.data_dir)
@@ -60,6 +62,7 @@ class readout(object):
         self.vna_save_filename = "vna_sweep.csv"
         self.iq_sweep_save_filename = "iq_sweep.p"
         self.stream_save_filename = "stream.p"
+        self.res_class_save_filename = "resonators.csv"
         
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
@@ -332,9 +335,10 @@ class readout(object):
                 else:
                     print("error with file "+filename)
 
-    def save_iq_data(self):
+    def save_iq_data(self,filename_suffix = ""):
         timestr = time.strftime("%Y%m%d_%H%M%S")
-        save_filename = self.data_dir+"/"+timestr+"_"+self.iq_sweep_save_filename
+        save_filename = self.data_dir+"/"+timestr+"_"+self.iq_sweep_save_filename.split(".")[0]+\
+            filename_suffix+self.iq_sweep_save_filename.split(".")[1]
         data_io.write_iq_sweep_data(save_filename,self.iq_sweep_freqs,self.iq_sweep_data)
         return save_filename
         
@@ -387,6 +391,27 @@ class readout(object):
                         
         else:
             print("No VNA data found")
+
+    def save_res_class(self):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_"+self.res_class_save_filename
+        data_io.write_resonators_class(save_filename,self.res_class)
+
+    def load_res_class(self,filename = None):
+        if not filename:
+            list_of_files = glob.glob(self.data_dir+'/*'+self.res_class_save_filename)
+            latest_file = max(list_of_files, key=os.path.getctime)
+            self.res_class = data_io.read_resonators_class(latest_file)
+        else:
+            try:
+                self.res_class = data_io.read_resonators_class(filename)
+            except:
+                print("could not read file: "+filename)
+                if not os.path.exists(filename):
+                    print(filename+" does not seem to exist")
+                else:
+                    print("error with file "+filename)
+        
             
 
     def get_data(self,to_read,verbose= True):
@@ -483,3 +508,56 @@ class readout(object):
         save_filename = self.data_dir+"/"+timestr+"_noise_set_filenames.txt"
         data_io.write_filename_set(save_filename,filenames)
         
+
+    def fit_cable_delay(self,plot = True):
+        if list(self.vna_data):
+            phase = np.arctan2(np.real(self.vna_data),np.imag(self.vna_data))
+            self.tau,phase_gradient = cal.fit_cable_delay_from_slope(self.vna_freqs,phase,plot = plot)
+            print("tau = "+str(self.tau))
+        else:
+            print("No VNA data found")
+
+
+    def power_sweep(self,max_attenuation,min_attenuation,attenuation_step,span=100*10**3,npts = 101,
+                    average = 1024*10,output_attenuation = None,plot = False):
+        '''
+        do iq sweeps at different power levels to find bifurcation power levels
+        output_attenutaion should be set to a single value that is good is at 
+        halfway between max and min attenuation
+        '''
+        n_attn_levels = np.int((max_attenuation-min_attenuation)/attenuation_step)+1
+        attn_levels = np.linspace(max_attenuation,min_attenuation,n_attn_levels)
+        if output_attenuation is not None:
+            if self.output_attenuator is not None:
+                attn_levels_output = attn_levels[::-1]-(attn_levels[len(attn_levels)//2]-output_attenuation)
+            else:
+                print("No output attenuator connected do not specify output_attenuation")
+                return
+        else:
+            if self.output_attenuator is not None: # best guess
+                output_attenuation = self.output_attenuator.get_attenuation()
+                attn_levels_output = attn_levels[::-1]-(attn_levels[len(attn_levels)//2]-output_attenuation)
+        if self.output_attenuator is not None:
+            index_lt_zero = np.where(attn_levels_output<0)
+            attn_levels_output[index_lt_zero] = 0
+            
+        filenames = []
+        for k in tqdm(range(0,n_attn_levels)):
+            self.input_attenuator.set_attenuation(attn_levels[k])
+            input_attenuation = self.input_attenuator.get_attenuation()
+            if self.output_attenuator is not None:
+                self.output_attenuator.set_attenuation(attn_levels_output[k])
+                output_attenuation = self.output_attenuator.get_attenuation()
+                print("Input Attenuation = "+str(input_attenuation)+" Output_attenaution = " +\
+                      str(output_attenuation))
+            else:
+                print("Input Attenuation = "+str(input_attenuation))
+            self.iq_sweep(span,npts,average,plot = False)
+            filenames.append(self.save_iq_data())
+        self.save_power_sweep_filenames(filenames,attn_levels)
+        
+        
+    def save_power_sweep_filenames(self,filenames,attn_levels):
+        timestr = time.strftime("%Y%m%d_%H%M%S")
+        save_filename = self.data_dir+"/"+timestr+"_power_sweep_filenames.txt"
+        data_io.write_filename_set(save_filename,filenames,attn_levels)
