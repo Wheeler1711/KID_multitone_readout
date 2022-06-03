@@ -10,6 +10,7 @@ from instruments import weinchel8310 as weinchel
 import resonator_class as res_class
 from KIDs import find_resonances_interactive as find_res
 from KIDs import calibrate as cal
+from KIDs import resonance_fitting as res_fit
 import tune_resonators as tune_resonators
 import os
 import data_io as data_io
@@ -63,6 +64,10 @@ class readout(object):
         self.iq_sweep_save_filename = "iq_sweep.p"
         self.stream_save_filename = "stream.p"
         self.res_class_save_filename = "resonators.csv"
+        self.iq_sweep_iq_fits = None
+        self.power_sweep_iq_data = None
+        self.power_sweep_iq_fits = None
+        self.normalizing_amplitudes = None
         
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
@@ -215,7 +220,9 @@ class readout(object):
 
     def plot_iq_sweep(self):
         if self.iq_sweep_data is not None:
-            ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False)        
+            ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False,
+                                                  combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
+                                                  combined_data_names = ["Resonator Frequencies (MHz)"])        
         else:
             print("No IQ sweep data found: unable to plot")
 
@@ -349,7 +356,7 @@ class readout(object):
             self.iq_sweep_freqs,self.iq_sweep_data = data_io.read_iq_sweep_data(latest_file)
         else:
             try:
-                self.vna_freqs,self.vna_data = data_io.read_iq_sweep_data(filename)
+                self.iq_sweep_freqs,self.iq_sweep_data = data_io.read_iq_sweep_data(filename)
             except:
                 print("could not read file: "+filename)
                 if not os.path.exists(filename):
@@ -461,13 +468,25 @@ class readout(object):
         self.frontend.write_monstop(0)
 
 
-    def write_resonator_tones(self):
+    def write_resonator_tones(self,amplitude = None):
         frequencies = []
         for m in range(len(self.res_class.resonators)):
             if self.res_class.resonators[m].use == True:
                 frequencies.append(self.res_class.resonators[m].frequency-self.lo_freq)
 
-        self.set_frequencies(frequencies,0.8)
+        if amplitude is not None:
+            if np.sum(amplitude)>0.8:
+                amplitude = amplitude/np.sum(amplitude)*0.8
+            print("Normalizing tone powers")
+            self.set_frequencies(frequencies,amplitude)
+        elif self.normalizing_amplitudes is not None:
+            amplitude = self.normalizing_amplitudes
+            if np.sum(amplitude)>0.8:
+                amplitude = amplitude/np.sum(amplitude)*0.8
+            print("Normalizing tone powers")
+            self.set_frequencies(frequencies,amplitude)
+        else:
+            self.set_frequencies(frequencies,0.8/len(frequencies))
 
     def mask_by_separation(self,required_separation):
         '''
@@ -527,6 +546,9 @@ class readout(object):
         '''
         n_attn_levels = np.int((max_attenuation-min_attenuation)/attenuation_step)+1
         attn_levels = np.linspace(max_attenuation,min_attenuation,n_attn_levels)
+        n_res = len(self.chanlist)
+        self.power_sweep_iq_data = np.zeros((npts,n_res,n_attn_levels),dtype = 'complex')
+        self.power_sweep_iq_freqs = np.zeros((npts,n_res,n_attn_levels)) 
         if output_attenuation is not None:
             if self.output_attenuator is not None:
                 attn_levels_output = attn_levels[::-1]-(attn_levels[len(attn_levels)//2]-output_attenuation)
@@ -553,7 +575,10 @@ class readout(object):
             else:
                 print("Input Attenuation = "+str(input_attenuation))
             self.iq_sweep(span,npts,average,plot = False)
+            self.power_sweep_iq_data[:,:,k] = self.iq_sweep_data
+            self.power_sweep_iq_freqs[:,:,k] = self.iq_sweep_freqs
             filenames.append(self.save_iq_data())
+        self.attn_levels = attn_levels
         self.save_power_sweep_filenames(filenames,attn_levels)
         
         
@@ -561,3 +586,69 @@ class readout(object):
         timestr = time.strftime("%Y%m%d_%H%M%S")
         save_filename = self.data_dir+"/"+timestr+"_power_sweep_filenames.txt"
         data_io.write_filename_set(save_filename,filenames,attn_levels)
+
+    def load_power_sweep_data(self,input_filename_of_filenames = None):
+        if not input_filename_of_filenames:
+            list_of_files = glob.glob(self.data_dir+'/*'+"_power_sweep_filenames.txt")
+            latest_file = max(list_of_files, key=os.path.getctime)
+            filenames,self.attn_levels  = data_io.read_filename_set(latest_file)
+            print(self.attn_levels)
+            print(filenames)
+        else:
+            try:
+                filenames,self.attn_levels = data_io.read_filename_set(filename)
+            except:
+                print("could not read file: "+filename)
+                if not os.path.exists(filename):
+                    print(filename+" does not seem to exist")
+                    return
+                else:
+                    print("error with file "+filename)
+                    return
+        self.attn_levels = np.asarray(self.attn_levels,dtype = 'float')
+        n_attn_levels = len(filenames)
+        self.load_iq_data(filenames[0])
+        self.power_sweep_iq_data = np.zeros((self.iq_sweep_data.shape[0],self.iq_sweep_data.shape[1],n_attn_levels),dtype = 'complex')
+        self.power_sweep_iq_freqs = np.zeros((self.iq_sweep_data.shape[0],self.iq_sweep_data.shape[1],n_attn_levels))
+        self.power_sweep_iq_data[:,:,0] = self.iq_sweep_data
+        self.power_sweep_iq_freqs[:,:,0] = self.iq_sweep_freqs
+        for k in range(1,n_attn_levels):
+            self.load_iq_data(filenames[k])
+            self.power_sweep_iq_data[:,:,k] = self.iq_sweep_data
+            self.power_sweep_iq_freqs[:,:,k] = self.iq_sweep_freqs
+            
+    def fit_iq_sweep(self):
+        if self.iq_sweep_data is not None:
+            self.iq_sweep_iq_fits = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,self.iq_sweep_data,self.tau)
+        else:
+            print("No iq sweep data found")
+
+    def fit_power_sweep(self):
+        if self.power_sweep_iq_data is not None:
+            self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],8))
+            for k in tqdm(range(0,self.power_sweep_iq_data.shape[2])):
+                self.power_sweep_iq_fits[:,k,:] = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
+                                                                                 self.power_sweep_iq_data[:,:,k],self.tau)
+        else:
+            print("No power sweep data found")
+                
+    def tune_powers(self):
+        if self.power_sweep_iq_fits is not None:
+            self.picked_power_levels,self.normalizing_amplitudes = \
+            tune_resonators.tune_resonance_power(self.power_sweep_iq_freqs,
+                                                  self.power_sweep_iq_data,
+                                                  self.attn_levels,
+                                                  fitted_a_iq = self.power_sweep_iq_fits[:,:,4])
+        else:
+            print("Run fitting over power sweep first")
+            
+    def plot_iq_sweep_fits(self):
+        if self.iq_sweep_data is not None:
+            if self.iq_sweep_iq_fits is not None:
+                ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False,
+                                                  combined_data = self.iq_sweep_iq_fits,
+                                                  combined_data_names = ["Resonator Frequencies (MHz)",
+                                                                         "Qr","amp","phi","a","i0","q0","f0"])
+
+
+            

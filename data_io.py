@@ -62,7 +62,7 @@ def write_filename_set(output_filename,filenames,value_list_1 = None):
 def read_filename_set(input_filename):
     filenames = []
     value_list_1 = []
-    with open(input_filename,'w') as f:
+    with open(input_filename,'r') as f:
         raw_lines = [raw_line.strip() for raw_line in f.readlines()]
         for line in raw_lines:
             if len(line.split(","))>1:
