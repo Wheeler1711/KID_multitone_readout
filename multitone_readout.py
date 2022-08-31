@@ -4,14 +4,17 @@ import qsghw.core.helpers as corehelpers
 import qsghw.fpgaip.helpers as fpgaiphelpers
 import qsghw.misc.windows as windows
 import qsghw.core.packetparser as packetparser
+import qsghw.core.interfaces as interfaces
 import time
-from instruments import hp83732a as hp
-from instruments import weinchel8310 as weinchel
+from submm.instruments import hp83732a as hp
+from submm.instruments import BNC845 as bnc
+from submm.instruments import weinchel8310 as weinchel
+from submm.lab_brick import core as corelabbrick
 import resonator_class as res_class
-from KIDs import find_resonances_interactive as find_res
-from KIDs import calibrate as cal
-from KIDs import resonance_fitting as res_fit
-import tune_resonators as tune_resonators
+from submm.KIDs import find_resonances_interactive as find_res
+from submm.KIDs import calibrate as cal
+from submm.KIDs import resonance_fitting as res_fit
+from submm.KIDs import res_sweep_tools as tune_resonators
 import os
 import data_io as data_io
 import glob
@@ -24,6 +27,7 @@ class readout(object):
     def __init__(self):
         self.ctrl = "tcp://192.168.0.128"
         self.window_type = "roach2"
+        #self.window_type = "hft70-1024"
         self.merge = 256
         self.decimate = 1
         self.amp = 0.4
@@ -37,25 +41,28 @@ class readout(object):
         self.debug = False
         self.verbose = False
         self.group = 0
-        self.fshift = -24
+        self.fshift = -16
         self.pshift = 0
         self.qshift = -16
         self.pktsize = 8192
         self.tag = None
         self.frequencies = [-19.875*10**6,-50*10**6]
         self.amplitude = 0.4
-        self.lo = hp.synthesizer()
-        self.lo_freq = 500.00*10**6
+        #self.lo = hp.synthesizer()
+        self.lo = bnc.synthesizer()
+        self.lo_freq = 620.00*10**6
         self.lo.set_frequency(self.lo_freq)
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
-        self.input_attenuator = weinchel.attenuator() #input to detectors, output of fpga
-        self.output_attenuator = weinchel.attenuator('GPIB0::8::INSTR')
+        #self.input_attenuator = weinchel.attenuator('GPIB0::8::INSTR') #input to detectors, output of fpga
+        #self.output_attenuator = None#weinchel.attenuator()
+        self.input_attenuator = corelabbrick.Attenuator(0x041f,0x1208,11874)
+        self.output_attenuator = corelabbrick.Attenuator(0x41f,0x1208,11875)
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
         self.tau = 66*10**-9
         self.stream_data = None
-        self.data_dir = "~/multitone_data"
+        self.data_dir = "/data/multitone_data"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -75,7 +82,8 @@ class readout(object):
         self.ctrlif.debug = [self.insane, self.show_access]
 
         self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
-        self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
+        #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
+        self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)  
         self.circb = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":circbuffer:", "")
         self.wfplayer.debug = self.frontend.debug = self.frontend.pfbfft.debug = self.frontend.binsel[self.group].debug \
             = self.frontend.fineddc[self.group].debug = self.circb.debug = (self.regaccess, self.debug, self.verbose)
@@ -87,14 +95,17 @@ class readout(object):
         print("samplerate = %8.3f MHz   iqorder = %d" % (self.samplerate/1e6, self.iqorder))
         print()
 
+        
         # stop flow of data
         self.frontend.write_monstop(1)
 
         # generate and write window - accept exteneded window names
         # okay to overwirte window?
         self.window = windows.mkwinbyextname(self.window_type, self.frontend.get_windowlen(), self.frontend.get_fftlen())
+        self.frontend.write_window(self.window)
         print("window =", self.window_type, len(self.window))
 
+        #self.frontend.change_output(self.output,self.merge,self.decimate)
         self.frontend.write_fshift(self.fshift)
         self.frontend.write_pshift(self.pshift)
         self.frontend.write_qshift(self.qshift)
@@ -104,16 +115,16 @@ class readout(object):
 
         # frontend output selection
         print("frontend output = %s   merge = %3d   decimate = %3d" % (self.output, self.merge, self.decimate))
-        self.frontend.change_output(self.output, self.merge, self.decimate)
+        #self.frontend.change_output(self.output, self.merge, self.decimate)
 
         # apply tag
         if self.tag: self.frontend.write_tag(int(self.tag, 0))
 
         # not frontend, but anyways: program and reset circbuffer
-        self.circb.write_packetsize(self.pktsize)
-        self.circb.write_bufspace(0) # 0 => maximum supported
-        self.circb.reset()
-        print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
+        #self.circb.write_packetsize(self.pktsize)
+        #self.circb.write_bufspace(0) # 0 => maximum supported
+        #self.circb.reset()
+        #print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
 
         self.set_frequencies(self.frequencies,self.amp)
 
@@ -165,9 +176,11 @@ class readout(object):
         
         
         n_tones = len(frequencies)
-        self.merge = 512//n_tones #how many samples in a packet
+        self.merge = 256//n_tones #how many samples in a packet
         print("merge = "+str(self.merge))
+        
         self.frontend.change_output(self.output, self.merge, self.decimate)
+        
         self.real_freq_list = []
         self.wfplayer.del_tone(groupid = self.group)
         for i in range(0,len(frequencies)):
@@ -186,9 +199,12 @@ class readout(object):
                 self.wfplayer.set_tone(self.group,i,frequencies[i],phase[i],phase[i],amplitude[i],amplitude[i])
                 self.real_freq_list.append(self.wfplayer.get_tone(self.group,i)[0])
             self.wfplayer.write_tone_list()
+            maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
+            if maximum_of_wave>0.95*(2**16//2-1):
+                print("!!!!Warning you may be clipping DAQ waverform!!!!")
             
         # old way with list 
-        #self.real_freq_list = self.wfplayer.set_tone_list(self.group, frequencies, write=True, amp=amplitude)
+        #self.real_freq_list = self.wfplayer.set_tone_list(self.group, frequencies, write=True, amp=amplitude[0])
         self.chanlist = self.frontend.set_chan_list(self.group, self.real_freq_list, write=True)
         self.binnolist = [ self.frontend.get_chan(self.group, i)[1] for i in self.chanlist ]
 
@@ -201,14 +217,14 @@ class readout(object):
         print()
 
 
-    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True):
+    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True,leave = True):
         to_read = int(1024*average) # at some point should turn this into an integration time
         self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
         self.iq_sweep_freqs = np.zeros((npts,len(self.real_freq_list)))
         for m in range(0,len(self.real_freq_list)):
             self.iq_sweep_freqs[:,m] = self.iq_sweep_freqs_lo+self.real_freq_list[m]
         self.iq_sweep_data = np.zeros((len(self.iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
-        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts):
+        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts,leave = leave):
             self.lo.set_frequency(freq)
             time.sleep(0.1)
             self.lo.get_frequency()
@@ -257,8 +273,8 @@ class readout(object):
         currently limited to putting tone ~10MHz apart
         '''
         n_tones = span//(10*10**6)
-        if n_tones >100:
-            n_tones = 100
+        if n_tones >512:
+            n_tones = 512
         print("Using "+str(n_tones)+" for VNA sweep")
         self.frequencies = list(np.linspace(-span/2,span/2,n_tones))
         tone_spacing = self.frequencies[1]-self.frequencies[0]
@@ -274,11 +290,14 @@ class readout(object):
 
         to_read = int(1024*average) # at some point should turn this into an integration time                                           
         iq_sweep_data = np.zeros((len(iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
-        for n, freq in enumerate(iq_sweep_freqs):
+
+        pbar = tqdm(enumerate(iq_sweep_freqs),total = len(iq_sweep_freqs),ascii=True)
+        for n, freq in pbar:
             self.lo.set_frequency(freq)
             time.sleep(0.01)
             curr_freq = self.lo.get_frequency()
-            print(str(curr_freq/10**6)+" MHz")
+            pbar.set_description(f'{"%3.3f" % (curr_freq/10**6)} MHz')
+            #print(str(curr_freq/10**6)+" MHz")
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
@@ -345,7 +364,7 @@ class readout(object):
     def save_iq_data(self,filename_suffix = ""):
         timestr = time.strftime("%Y%m%d_%H%M%S")
         save_filename = self.data_dir+"/"+timestr+"_"+self.iq_sweep_save_filename.split(".")[0]+\
-            filename_suffix+self.iq_sweep_save_filename.split(".")[1]
+            filename_suffix+"."+self.iq_sweep_save_filename.split(".")[1]
         data_io.write_iq_sweep_data(save_filename,self.iq_sweep_freqs,self.iq_sweep_data)
         return save_filename
         
@@ -385,7 +404,7 @@ class readout(object):
                 else:
                     print("error with file "+filename)
                     
-    def find_kids(self):
+    def find_resonators(self):
         if list(self.vna_data): #pythonic booleaness of list/None does not work on np.arrays() 
             if len(self.res_class.resonators)==0: #first time finding resonators
                 ip = find_res.find_vna_sweep(self.vna_freqs,self.vna_data)
@@ -423,9 +442,12 @@ class readout(object):
 
     def get_data(self,to_read,verbose= True):
         self.dataif.reset()
-        (nbytes,buffer) = self.dataif.readall(to_read)
-        (headeroffsets, payloadoffsets, payloadlengths, seqnos) = packetparser.findlongestcontinuous(buffer, incr=1024)
-        (consumed, alldata) = packetparser.parsemany(buffer, headeroffsets[0], payloadoffsets, verbose = verbose)
+        (nbytes,raw_data) = self.dataif.readall(to_read)
+        #print(nbytes)
+        #print(buffer)
+        (headeroffsets, payloadoffsets, payloadlengths, seqnos) = packetparser.findlongestcontinuous(raw_data, incr=512)
+        (consumed, alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
+        #print(alldata)
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
         alldata_array = alldata.data['i']+1j*alldata.data['q']
         return alldata_array
@@ -506,12 +528,16 @@ class readout(object):
                 resonator.use = True
                 last_active_frequency = resonator.frequency
 
-    def take_noise_set(self,gain_span = 1e6,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True):
+    def take_noise_set(self,gain_span = 1e6,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True,retune = True):
         filenames = []
-        print("taking gain sweep")
-        self.iq_sweep(gain_span,plot = False)
-        filenames.append(self.save_iq_data())
-        print("taking fine sweep")
+        if retune:
+            print("taking tunning iq sweep")
+            self.iq_sweep(fine_span,plot = False)
+            self.retune_resonators()
+        #print("taking gain sweep")
+        #self.iq_sweep(gain_span,plot = False)
+        #filenames.append(self.save_iq_data())
+        print("taking iq sweep")
         self.iq_sweep(fine_span,plot = False)
         filenames.append(self.save_iq_data())
         print("taking streaming data")
@@ -538,7 +564,7 @@ class readout(object):
 
 
     def power_sweep(self,max_attenuation,min_attenuation,attenuation_step,span=100*10**3,npts = 101,
-                    average = 1024*10,output_attenuation = None,plot = False):
+                    average = 1024*10,output_attenuation = None,plot = False,pause_between_powers =1 ):
         '''
         do iq sweeps at different power levels to find bifurcation power levels
         output_attenutaion should be set to a single value that is good is at 
@@ -564,22 +590,30 @@ class readout(object):
             attn_levels_output[index_lt_zero] = 0
             
         filenames = []
-        for k in tqdm(range(0,n_attn_levels)):
+        pbar = tqdm(range(0,n_attn_levels))
+        initial_input_attenuation = self.input_attenuator.get_attenuation()
+        if self.output_attenuator is not None:
+            initial_output_attenuation = self.output_attenuator.get_attenuation()
+        for k in pbar:
             self.input_attenuator.set_attenuation(attn_levels[k])
             input_attenuation = self.input_attenuator.get_attenuation()
             if self.output_attenuator is not None:
                 self.output_attenuator.set_attenuation(attn_levels_output[k])
                 output_attenuation = self.output_attenuator.get_attenuation()
-                print("Input Attenuation = "+str(input_attenuation)+" Output_attenaution = " +\
+                pbar.set_description("Input Attenuation = "+str(input_attenuation)+" Output_attenaution = " +\
                       str(output_attenuation))
             else:
-                print("Input Attenuation = "+str(input_attenuation))
-            self.iq_sweep(span,npts,average,plot = False)
+                pbar.set_description("Input Attenuation = "+str(input_attenuation))
+            time.sleep(pause_between_powers)
+            self.iq_sweep(span,npts,average,plot = False,leave = False)
             self.power_sweep_iq_data[:,:,k] = self.iq_sweep_data
             self.power_sweep_iq_freqs[:,:,k] = self.iq_sweep_freqs
             filenames.append(self.save_iq_data())
         self.attn_levels = attn_levels
         self.save_power_sweep_filenames(filenames,attn_levels)
+        self.input_attenuator.set_attenuation(initial_input_attenuation)
+        if self.output_attenuator is not None:
+            self.output_attenuator.set_attenuation(initial_output_attenuation)
         
         
     def save_power_sweep_filenames(self,filenames,attn_levels):
@@ -628,7 +662,7 @@ class readout(object):
             self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],8))
             for k in tqdm(range(0,self.power_sweep_iq_data.shape[2])):
                 self.power_sweep_iq_fits[:,k,:] = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
-                                                                                 self.power_sweep_iq_data[:,:,k],self.tau)
+                                                                                 self.power_sweep_iq_data[:,:,k],self.tau,verbose = False)
         else:
             print("No power sweep data found")
                 
