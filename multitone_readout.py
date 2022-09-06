@@ -10,6 +10,7 @@ from submm.instruments import hp83732a as hp
 from submm.instruments import BNC845 as bnc
 from submm.instruments import weinchel8310 as weinchel
 from submm.lab_brick import core as corelabbrick
+from submm.instruments import cryocon22C as cc
 import resonator_class as res_class
 from submm.KIDs import find_resonances_interactive as find_res
 from submm.KIDs import calibrate as cal
@@ -21,6 +22,7 @@ import glob
 from tqdm import tqdm
 from scipy import signal
 yeses = ['yes','y']
+import sys
 
 class readout(object):
 
@@ -54,15 +56,17 @@ class readout(object):
         self.lo.set_frequency(self.lo_freq)
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
+        self.iq_sweep_data_old = None
         #self.input_attenuator = weinchel.attenuator('GPIB0::8::INSTR') #input to detectors, output of fpga
         #self.output_attenuator = None#weinchel.attenuator()
         self.input_attenuator = corelabbrick.Attenuator(0x041f,0x1208,11874)
         self.output_attenuator = corelabbrick.Attenuator(0x41f,0x1208,11875)
+        self.BB = cc.temp_control()
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
         self.tau = 66*10**-9
         self.stream_data = None
-        self.data_dir = "/data/multitone_data"
+        self.data_dir = "/data/multitone_data/20220831_512_HAWC_optical/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -75,6 +79,7 @@ class readout(object):
         self.power_sweep_iq_data = None
         self.power_sweep_iq_fits = None
         self.normalizing_amplitudes = None
+        self.pbar_ascii = True
         
         (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
@@ -176,7 +181,7 @@ class readout(object):
         
         
         n_tones = len(frequencies)
-        self.merge = 256//n_tones #how many samples in a packet
+        self.merge = 512//n_tones #how many samples in a packet
         print("merge = "+str(self.merge))
         
         self.frontend.change_output(self.output, self.merge, self.decimate)
@@ -218,13 +223,16 @@ class readout(object):
 
 
     def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True,leave = True):
+        if self.iq_sweep_data is not None:
+            self.iq_sweep_data_old = self.iq_sweep_data
+            self.iq_sweep_freqs_old = self.iq_sweep_freqs
         to_read = int(1024*average) # at some point should turn this into an integration time
         self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
         self.iq_sweep_freqs = np.zeros((npts,len(self.real_freq_list)))
         for m in range(0,len(self.real_freq_list)):
             self.iq_sweep_freqs[:,m] = self.iq_sweep_freqs_lo+self.real_freq_list[m]
         self.iq_sweep_data = np.zeros((len(self.iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
-        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts,leave = leave):
+        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts,leave = leave,ascii = self.pbar_ascii):
             self.lo.set_frequency(freq)
             time.sleep(0.1)
             self.lo.get_frequency()
@@ -234,11 +242,21 @@ class readout(object):
         if plot:
             self.plot_iq_sweep()
 
-    def plot_iq_sweep(self):
+    def plot_iq_sweep(self,plot_two = False,retune = False):
         if self.iq_sweep_data is not None:
-            ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False,
+            if not plot_two:
+                ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = retune,
                                                   combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
-                                                  combined_data_names = ["Resonator Frequencies (MHz)"])        
+                                                      combined_data_names = ["Resonator Frequencies (MHz)"])
+            else:
+                if self.iq_sweep_data_old is not None:
+                    multi_sweep_freqs = np.dstack((np.expand_dims(self.iq_sweep_freqs,axis = 2),np.expand_dims(self.iq_sweep_freqs_old,axis = 2)))
+                    multi_sweep_z = np.dstack((np.expand_dims(self.iq_sweep_data,axis = 2),np.expand_dims(self.iq_sweep_data_old,axis = 2)))
+                    ip = tune_resonators.interactive_plot(multi_sweep_freqs,multi_sweep_z,retune = retune,
+                                                  combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
+                                                      combined_data_names = ["Resonator Frequencies (MHz)"])
+                else:
+                    print("only one iq sweep data set found cannot plot two")
         else:
             print("No IQ sweep data found: unable to plot")
 
@@ -247,7 +265,7 @@ class readout(object):
             print("number of resonators in iq data does not match number of currently"+\
                   "active resonator cannot retune because iq information is ambiguouse")
             return
-            # could allow this if I do some matching to figure out what is what
+        # could allow this if I do some matching to figure out what is what
         #    confirmation = input("number of resonators in iq data does not match"+\
         #                         "number of currently active resonators: Proceed? y/n")
         #    if confirmation in yeses: #should I allow this
@@ -267,16 +285,16 @@ class readout(object):
             
             
 
-    def vna_sweep(self,span,resolution = 1*10**3,average = 1024*10):
+    def vna_sweep(self,start,stop,resolution = 1*10**3,average = 1024*10,min_tone_spacing = 4*10**6,plot = True):
         '''
         Pretend we are vna for finding resonances
         currently limited to putting tone ~10MHz apart
         '''
-        n_tones = span//(10*10**6)
+        n_tones = (stop-start)//(min_tone_spacing)+1
         if n_tones >512:
             n_tones = 512
         print("Using "+str(n_tones)+" for VNA sweep")
-        self.frequencies = list(np.linspace(-span/2,span/2,n_tones))
+        self.frequencies = list(np.linspace(start-self.lo_freq,stop-self.lo_freq,n_tones))
         tone_spacing = self.frequencies[1]-self.frequencies[0]
         npts = int(tone_spacing//resolution)
         
@@ -291,7 +309,7 @@ class readout(object):
         to_read = int(1024*average) # at some point should turn this into an integration time                                           
         iq_sweep_data = np.zeros((len(iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
 
-        pbar = tqdm(enumerate(iq_sweep_freqs),total = len(iq_sweep_freqs),ascii=True)
+        pbar = tqdm(enumerate(iq_sweep_freqs),total = len(iq_sweep_freqs),ascii=self.pbar_ascii)
         for n, freq in pbar:
             self.lo.set_frequency(freq)
             time.sleep(0.01)
@@ -305,6 +323,9 @@ class readout(object):
         self.vna_data = np.asarray(()) 
         for m in range(0,len(self.real_freq_list)):
             self.vna_data = np.append(self.vna_data,iq_sweep_data[:,m])
+
+        if plot:
+            self.plot_vna_sweep()
 
 
 
@@ -444,12 +465,20 @@ class readout(object):
         self.dataif.reset()
         (nbytes,raw_data) = self.dataif.readall(to_read)
         #print(nbytes)
-        #print(buffer)
-        (headeroffsets, payloadoffsets, payloadlengths, seqnos) = packetparser.findlongestcontinuous(raw_data, incr=512)
+        if verbose:
+            print("raw data",sys.getsizeof(raw_data))
+        (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
+            packetparser.findlongestcontinuous(raw_data, incr=512,decimate = self.decimate)
+        if verbose:
+            print(sys.getsizeof(headeroffsets),sys.getsizeof(payloadoffsets),sys.getsizeof(payloadlengths),sys.getsizeof(seqnos))
         (consumed, alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
+        if verbose:
+            print(sys.getsizeof(consumed),sys.getsizeof(alldata))
         #print(alldata)
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
         alldata_array = alldata.data['i']+1j*alldata.data['q']
+        if verbose:
+            print(sys.getsizeof(alldata_array))
         return alldata_array
 
 
@@ -508,6 +537,8 @@ class readout(object):
             print("Normalizing tone powers")
             self.set_frequencies(frequencies,amplitude)
         else:
+            #print(0.8/len(frequencies))
+            #print(np.isscalar(0.8/len(frequencies)))
             self.set_frequencies(frequencies,0.8/len(frequencies))
 
     def mask_by_separation(self,required_separation):
@@ -528,7 +559,7 @@ class readout(object):
                 resonator.use = True
                 last_active_frequency = resonator.frequency
 
-    def take_noise_set(self,gain_span = 1e6,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True,retune = True):
+    def take_noise_set(self,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True,retune = True):
         filenames = []
         if retune:
             print("taking tunning iq sweep")
@@ -590,7 +621,7 @@ class readout(object):
             attn_levels_output[index_lt_zero] = 0
             
         filenames = []
-        pbar = tqdm(range(0,n_attn_levels))
+        pbar = tqdm(range(0,n_attn_levels),ascii = self.pbar_ascii)
         initial_input_attenuation = self.input_attenuator.get_attenuation()
         if self.output_attenuator is not None:
             initial_output_attenuation = self.output_attenuator.get_attenuation()
@@ -651,18 +682,21 @@ class readout(object):
             self.power_sweep_iq_data[:,:,k] = self.iq_sweep_data
             self.power_sweep_iq_freqs[:,:,k] = self.iq_sweep_freqs
             
-    def fit_iq_sweep(self):
+    def fit_iq_sweep(self,plot = True):
         if self.iq_sweep_data is not None:
             self.iq_sweep_iq_fits = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,self.iq_sweep_data,self.tau)
+            if plot:
+                self.plot_iq_sweep_fits()
         else:
             print("No iq sweep data found")
 
     def fit_power_sweep(self):
         if self.power_sweep_iq_data is not None:
-            self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],8))
-            for k in tqdm(range(0,self.power_sweep_iq_data.shape[2])):
-                self.power_sweep_iq_fits[:,k,:] = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
+            self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],9))
+            for k in tqdm(range(0,self.power_sweep_iq_data.shape[2]),ascii = self.pbar_ascii):
+                fits_dict = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
                                                                                  self.power_sweep_iq_data[:,:,k],self.tau,verbose = False)
+                self.power_sweep_iq_fits[:,k,:] = fits_dict['fits'] 
         else:
             print("No power sweep data found")
                 
@@ -679,10 +713,25 @@ class readout(object):
     def plot_iq_sweep_fits(self):
         if self.iq_sweep_data is not None:
             if self.iq_sweep_iq_fits is not None:
-                ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = False,
-                                                  combined_data = self.iq_sweep_iq_fits,
-                                                  combined_data_names = ["Resonator Frequencies (MHz)",
-                                                                         "Qr","amp","phi","a","i0","q0","f0"])
+
+                fit_data = np.vstack((self.iq_sweep_iq_fits['fits'][:,:-1].T,self.iq_sweep_iq_fits['Qi'],
+                                      self.iq_sweep_iq_fits['Qc'])).T
+                fit_data[:,0] = fit_data[:,0]/10**6
+                fit_data[:,7] = fit_data[:,7]*10**9
+                data_names = ["Resonator Frequencies (MHz)","Qr","amp","phi","a","i0","q0","tau (ns)","Qi","Qc"]
+
+                multi_sweep_freqs = np.dstack((np.expand_dims(self.iq_sweep_freqs,axis = 2),
+                                               np.expand_dims(self.iq_sweep_freqs,axis = 2)))
+                multi_sweep_z = np.dstack((np.expand_dims(self.iq_sweep_data,axis = 2),
+                                           np.expand_dims(self.iq_sweep_iq_fits['fit_results'],axis = 2)))
+                ip = tune_resonators.interactive_plot(multi_sweep_freqs,multi_sweep_z,retune = False,
+                                                  combined_data = fit_data,
+                                                      combined_data_names = data_names,
+                                                      sweep_labels = ['Data','Fit'])
+            else:
+                print("No fit data found")
+        else:
+            print("No iq data found")
 
 
             
