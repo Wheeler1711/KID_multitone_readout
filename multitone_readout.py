@@ -26,8 +26,12 @@ import sys
 
 class readout(object):
 
-    def __init__(self):
+    def __init__(self,connect_rfsoc = True):
+        '''
+        To debug software without connecting to RFSOC set connect_rfsoc = False
+        '''
         self.ctrl = "tcp://192.168.0.128"
+        #self.ctrl = "udp://10.0.0.10" 
         self.window_type = "roach2"
         #self.window_type = "hft70-1024"
         self.merge = 256
@@ -66,7 +70,7 @@ class readout(object):
         self.vna_data = None
         self.tau = 66*10**-9
         self.stream_data = None
-        self.data_dir = "/data/multitone_data/20220831_512_HAWC_optical/"
+        self.data_dir = "/data/multitone_data/20220915_512_HAWC_optical/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -80,75 +84,75 @@ class readout(object):
         self.power_sweep_iq_fits = None
         self.normalizing_amplitudes = None
         self.pbar_ascii = True
-        
-        (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
+
+        if connect_rfsoc:
+            (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
+            self.ctrlif.debug = [self.insane, self.show_access]
 
-        self.ctrlif.debug = [self.insane, self.show_access]
+            self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
+            #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
+            self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)  
+            self.circb = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":circbuffer:", "")
+            self.wfplayer.debug = self.frontend.debug = self.frontend.pfbfft.debug = self.frontend.binsel[self.group].debug \
+                = self.frontend.fineddc[self.group].debug = self.circb.debug = (self.regaccess, self.debug, self.verbose)
+            assert self.wfplayer and self.frontend and self.circb
 
-        self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
-        #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
-        self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)  
-        self.circb = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":circbuffer:", "")
-        self.wfplayer.debug = self.frontend.debug = self.frontend.pfbfft.debug = self.frontend.binsel[self.group].debug \
-            = self.frontend.fineddc[self.group].debug = self.circb.debug = (self.regaccess, self.debug, self.verbose)
-        assert self.wfplayer and self.frontend and self.circb
-
-        self.samplerate = self.wfplayer.samplerate = self.frontend.get_samplerate()
-        self.iqorder = self.wfplayer.iqorder = True if self.frontend.get_iqorder() else False
-        print()
-        print("samplerate = %8.3f MHz   iqorder = %d" % (self.samplerate/1e6, self.iqorder))
-        print()
+            self.samplerate = self.wfplayer.samplerate = self.frontend.get_samplerate()
+            self.iqorder = self.wfplayer.iqorder = True if self.frontend.get_iqorder() else False
+            print()
+            print("samplerate = %8.3f MHz   iqorder = %d" % (self.samplerate/1e6, self.iqorder))
+            print()
 
         
-        # stop flow of data
-        self.frontend.write_monstop(1)
+            # stop flow of data
+            self.frontend.write_monstop(1)
 
-        # generate and write window - accept exteneded window names
-        # okay to overwirte window?
-        self.window = windows.mkwinbyextname(self.window_type, self.frontend.get_windowlen(), self.frontend.get_fftlen())
-        self.frontend.write_window(self.window)
-        print("window =", self.window_type, len(self.window))
+            # generate and write window - accept exteneded window names
+            # okay to overwirte window?
+            self.window = windows.mkwinbyextname(self.window_type, self.frontend.get_windowlen(), self.frontend.get_fftlen())
+            self.frontend.write_window(self.window)
+            print("window =", self.window_type, len(self.window))
 
-        #self.frontend.change_output(self.output,self.merge,self.decimate)
-        self.frontend.write_fshift(self.fshift)
-        self.frontend.write_pshift(self.pshift)
-        self.frontend.write_qshift(self.qshift)
-        print("bit shifts after filter pfbfft fineddc =", self.frontend.read_fshift(), self.frontend.read_pshift(),
-              self.frontend.read_qshift())
-        print()
+            #self.frontend.change_output(self.output,self.merge,self.decimate)
+            self.frontend.write_fshift(self.fshift)
+            self.frontend.write_pshift(self.pshift)
+            self.frontend.write_qshift(self.qshift)
+            print("bit shifts after filter pfbfft fineddc =", self.frontend.read_fshift(), self.frontend.read_pshift(),
+                  self.frontend.read_qshift())
+            print()
 
-        # frontend output selection
-        print("frontend output = %s   merge = %3d   decimate = %3d" % (self.output, self.merge, self.decimate))
-        #self.frontend.change_output(self.output, self.merge, self.decimate)
+            # frontend output selection
+            print("frontend output = %s   merge = %3d   decimate = %3d" % (self.output, self.merge, self.decimate))
+            #self.frontend.change_output(self.output, self.merge, self.decimate)
 
-        # apply tag
-        if self.tag: self.frontend.write_tag(int(self.tag, 0))
+            # apply tag
+            if self.tag: self.frontend.write_tag(int(self.tag, 0))
 
-        # not frontend, but anyways: program and reset circbuffer
-        #self.circb.write_packetsize(self.pktsize)
-        #self.circb.write_bufspace(0) # 0 => maximum supported
-        #self.circb.reset()
-        #print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
+            # not frontend, but anyways: program and reset circbuffer
+            #self.circb.write_packetsize(self.pktsize)
+            #self.circb.write_bufspace(0) # 0 => maximum supported
+            #self.circb.reset()
+            #print("circbuf packetsize = %5d   bufspace = %6d" % (self.circb.read_packetsize(), self.circb.read_bufspace()))
 
-        self.set_frequencies(self.frequencies,self.amp)
+            self.set_frequencies(self.frequencies,self.amp)
 
-        # reset every frontend block, restart flow
-        self.frontend.write_rstall(1)
-        self.frontend.write_rstall(0)
-        self.frontend.write_monstop(0)
+            # reset every frontend block, restart flow
+            self.frontend.write_rstall(1)
+            self.frontend.write_rstall(0)
+            self.frontend.write_monstop(0)
 
-        # check that data is flowing: print conters 4 times
-        for i in range(4):
-            f = self.frontend # shorthand
-            print("running = %d   counters = %8d %8d %8d %8d" % (f.read_monrunning(), f.read_monvalcnt(), f.read_monlastcnt(),
+            # check that data is flowing: print conters 4 times
+            for i in range(4):
+                f = self.frontend # shorthand
+                print("running = %d   counters = %8d %8d %8d %8d" % (f.read_monrunning(), f.read_monvalcnt(), f.read_monlastcnt(),
                                                                  f.read_monpktcnt(), f.read_monlosscnt()))
             time.sleep(0.05)
-        print()
+            print()
 
-        print("wfplayer freq res = %10.6f kHz" % (self.wfplayer.get_tone_freq_res() / 1000))
-        print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
-        print()
+            print("wfplayer freq res = %10.6f kHz" % (self.wfplayer.get_tone_freq_res() / 1000))
+            print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
+            print()
 
     def variables(self):
         print("readout object's variables")
@@ -181,7 +185,7 @@ class readout(object):
         
         
         n_tones = len(frequencies)
-        self.merge = 512//n_tones #how many samples in a packet
+        self.merge = 1001//n_tones #how many samples in a packet
         print("merge = "+str(self.merge))
         
         self.frontend.change_output(self.output, self.merge, self.decimate)
@@ -239,6 +243,8 @@ class readout(object):
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
+
+        self.lo.set_frequency(self.lo_freq)
         if plot:
             self.plot_iq_sweep()
 
@@ -285,14 +291,14 @@ class readout(object):
             
             
 
-    def vna_sweep(self,start,stop,resolution = 1*10**3,average = 1024*10,min_tone_spacing = 4*10**6,plot = True):
+    def vna_sweep(self,start,stop,resolution = 1*10**3,average = 1024*10,min_tone_spacing = 0.2*10**6,plot = True):
         '''
         Pretend we are vna for finding resonances
         currently limited to putting tone ~10MHz apart
         '''
-        n_tones = (stop-start)//(min_tone_spacing)+1
-        if n_tones >512:
-            n_tones = 512
+        n_tones = (stop-start)//(int(min_tone_spacing))+1
+        if n_tones >1001:
+            n_tones = 1001
         print("Using "+str(n_tones)+" for VNA sweep")
         self.frequencies = list(np.linspace(start-self.lo_freq,stop-self.lo_freq,n_tones))
         tone_spacing = self.frequencies[1]-self.frequencies[0]
@@ -396,6 +402,9 @@ class readout(object):
             self.iq_sweep_freqs,self.iq_sweep_data = data_io.read_iq_sweep_data(latest_file)
         else:
             try:
+                if self.iq_sweep_data is not None:
+                    self.iq_sweep_data_old = self.iq_sweep_data
+                    self.iq_sweep_freqs_old = self.iq_sweep_freqs
                 self.iq_sweep_freqs,self.iq_sweep_data = data_io.read_iq_sweep_data(filename)
             except:
                 print("could not read file: "+filename)
@@ -468,7 +477,7 @@ class readout(object):
         if verbose:
             print("raw data",sys.getsizeof(raw_data))
         (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
-            packetparser.findlongestcontinuous(raw_data, incr=512,decimate = self.decimate)
+            packetparser.findlongestcontinuous(raw_data, incr=512)
         if verbose:
             print(sys.getsizeof(headeroffsets),sys.getsizeof(payloadoffsets),sys.getsizeof(payloadlengths),sys.getsizeof(seqnos))
         (consumed, alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
@@ -684,7 +693,18 @@ class readout(object):
             
     def fit_iq_sweep(self,plot = True):
         if self.iq_sweep_data is not None:
-            self.iq_sweep_iq_fits = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,self.iq_sweep_data,self.tau)
+            if self.res_class is not None:
+                center_freqs = []
+                for resonator in self.res_class.resonators:
+                    center_freqs.append(resonator.frequency)
+            else:
+                center_freqs = None
+                    
+            self.iq_sweep_iq_fits = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,
+                                                                   self.iq_sweep_data,
+                                                                   tau = self.tau,
+                                                                   center_freqs = np.asarray(center_freqs),
+                                                                   fit_overlap = 1/3.)
             if plot:
                 self.plot_iq_sweep_fits()
         else:
@@ -693,10 +713,21 @@ class readout(object):
     def fit_power_sweep(self):
         if self.power_sweep_iq_data is not None:
             self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],9))
+            self.power_sweep_fit_iq_data = np.zeros(self.power_sweep_iq_data.shape,dtype=np.complex)
+            if self.res_class is not None:
+                center_freqs = []
+                for resonator in self.res_class.resonators:
+                    center_freqs.append(resonator.frequency)
+                center_freqs = np.asarray(center_freqs)
+            else:
+                center_freqs = None
             for k in tqdm(range(0,self.power_sweep_iq_data.shape[2]),ascii = self.pbar_ascii):
                 fits_dict = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
-                                                                                 self.power_sweep_iq_data[:,:,k],self.tau,verbose = False)
-                self.power_sweep_iq_fits[:,k,:] = fits_dict['fits'] 
+                                                           self.power_sweep_iq_data[:,:,k],
+                                                           tau = self.tau,center_freqs = center_freqs,
+                                                           verbose = False)
+                self.power_sweep_iq_fits[:,k,:] = fits_dict['fits']
+                self.power_sweep_fit_iq_data[:,:,k] = fits_dict['fit_results']
         else:
             print("No power sweep data found")
                 
@@ -704,9 +735,11 @@ class readout(object):
         if self.power_sweep_iq_fits is not None:
             self.picked_power_levels,self.normalizing_amplitudes = \
             tune_resonators.tune_resonance_power(self.power_sweep_iq_freqs,
-                                                  self.power_sweep_iq_data,
-                                                  self.attn_levels,
-                                                  fitted_a_iq = self.power_sweep_iq_fits[:,:,4])
+                                                 self.power_sweep_iq_data,
+                                                 self.attn_levels,
+                                                 fitted_a_iq = self.power_sweep_iq_fits[:,:,4],
+                                                 z_fit_mag = self.power_sweep_fit_iq_data**2,
+                                                 z_fit_iq = self.power_sweep_fit_iq_data)
         else:
             print("Run fitting over power sweep first")
             

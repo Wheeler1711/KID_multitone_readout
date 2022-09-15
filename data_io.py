@@ -20,7 +20,7 @@ def read_vna_data(input_filename):
     imag = []
     with open(input_filename, "r") as f:
         raw_lines = [raw_line.strip() for raw_line in f.readlines()]
-    for line_index, raw_line in tqdm(list(enumerate(raw_lines))):
+    for line_index, raw_line in tqdm(list(enumerate(raw_lines)),ascii = True):
         if raw_lines[line_index][0] == "#":
             pass
         else:
