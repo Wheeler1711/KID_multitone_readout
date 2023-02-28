@@ -14,8 +14,8 @@ from submm.instruments import cryocon22C as cc
 import resonator_class as res_class
 from submm.KIDs import find_resonances_interactive as find_res
 from submm.KIDs import calibrate as cal
-from submm.KIDs import resonance_fitting as res_fit
-from submm.KIDs import res_sweep_tools as tune_resonators
+from submm.KIDs.res import fitting as res_fit
+from submm.KIDs.res import sweep_tools as tune_resonators
 import os
 import data_io as data_io
 import glob
@@ -61,9 +61,9 @@ class readout(object):
         self.data = "udp://10.0.0.10"
         self.iq_sweep_data = None
         self.iq_sweep_data_old = None
-        #self.input_attenuator = weinchel.attenuator('GPIB0::8::INSTR') #input to detectors, output of fpga
+        self.input_attenuator = weinchel.attenuator('GPIB0::8::INSTR') #input to detectors, output of fpga
         #self.output_attenuator = None#weinchel.attenuator()
-        self.input_attenuator = corelabbrick.Attenuator(0x041f,0x1208,11874)
+        #self.input_attenuator = corelabbrick.Attenuator(0x041f,0x1208,11874)
         self.output_attenuator = corelabbrick.Attenuator(0x41f,0x1208,11875)
         self.BB = cc.temp_control()
         self.res_class = res_class.resonators_class([])
@@ -79,7 +79,7 @@ class readout(object):
         self.iq_sweep_save_filename = "iq_sweep.p"
         self.stream_save_filename = "stream.p"
         self.res_class_save_filename = "resonators.csv"
-        self.iq_sweep_iq_fits = None
+        self.res_set = None
         self.power_sweep_iq_data = None
         self.power_sweep_iq_fits = None
         self.normalizing_amplitudes = None
@@ -200,7 +200,7 @@ class readout(object):
         
         if fill_DAQ_range: # this is ineffecient currently writing tones to board twice
             maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
-            scale_factor = (0.8*(2**16//2-1))/maximum_of_wave 
+            scale_factor = (0.9*(2**16//2-1))/maximum_of_wave 
             amplitude = amplitude*scale_factor
             self.real_freq_list = []
             self.wfplayer.del_tone(groupid = self.group)
@@ -226,7 +226,7 @@ class readout(object):
         print()
 
 
-    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True,leave = True):
+    def iq_sweep(self,span = 100*10**3,npts = 101,average = 1024*10,offset = 0.0,plot = True,leave = True,fit = False):
         if self.iq_sweep_data is not None:
             self.iq_sweep_data_old = self.iq_sweep_data
             self.iq_sweep_freqs_old = self.iq_sweep_freqs
@@ -245,22 +245,28 @@ class readout(object):
                 self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
         self.lo.set_frequency(self.lo_freq)
-        if plot:
+        if fit:
+            self.fit_iq_sweep()
+        elif plot:
             self.plot_iq_sweep()
 
     def plot_iq_sweep(self,plot_two = False,retune = False):
         if self.iq_sweep_data is not None:
             if not plot_two:
-                ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,retune = retune,
+                ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data,retune = retune,
                                                   combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
-                                                      combined_data_names = ["Resonator Frequencies (MHz)"])
+                                                      combined_data_names = ["Resonator Frequencies (MHz)"],
+                                                     flags = self.current_flags())
+                self.update_flags(ip.flags)
             else:
                 if self.iq_sweep_data_old is not None:
                     multi_sweep_freqs = np.dstack((np.expand_dims(self.iq_sweep_freqs,axis = 2),np.expand_dims(self.iq_sweep_freqs_old,axis = 2)))
                     multi_sweep_z = np.dstack((np.expand_dims(self.iq_sweep_data,axis = 2),np.expand_dims(self.iq_sweep_data_old,axis = 2)))
-                    ip = tune_resonators.interactive_plot(multi_sweep_freqs,multi_sweep_z,retune = retune,
+                    ip = tune_resonators.InteractivePlot(multi_sweep_freqs,multi_sweep_z,retune = retune,
                                                   combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
-                                                      combined_data_names = ["Resonator Frequencies (MHz)"])
+                                                         combined_data_names = ["Resonator Frequencies (MHz)"],
+                                                         flags = self.current_flags())
+                    self.update_flags(ip.flags)
                 else:
                     print("only one iq sweep data set found cannot plot two")
         else:
@@ -334,13 +340,13 @@ class readout(object):
             self.plot_vna_sweep()
 
 
-
     def get_stream_data(self,stream_len= 1024*1024*1024):
         self.lo.set_frequency(self.lo_freq) #make sure LO is back at nominal frequency
         time.sleep(0.1)
         self.stream_data = self.get_data(stream_len,verbose = False)
         self.stream_frequencies = [freq + self.lo_freq for freq in self.real_freq_list]
 
+        
     def plot_iq_and_stream(self,decimate = 1000):#eventualy decimate -> frequency
         # decimate only handels 1 sig fig i.e 2000 no 2500
         if self.stream_data is not None:
@@ -353,7 +359,9 @@ class readout(object):
                                                              decimate//(10**factors_of_10),axis =0)
                     
                 ip = tune_resonators.interactive_plot(self.iq_sweep_freqs,self.iq_sweep_data,
-                                                      stream_data = self.decimated_stream_data,retune = False)
+                                                      stream_data = self.decimated_stream_data,
+                                                      retune = False,flags = self.current_flags())
+                self.update_flags(ip.flags)
             else:
                 print("No IQ sweep data found: unable to plot")
         else:
@@ -550,23 +558,35 @@ class readout(object):
             #print(np.isscalar(0.8/len(frequencies)))
             self.set_frequencies(frequencies,0.8/len(frequencies))
 
-    def mask_by_separation(self,required_separation):
+    def mask_by_separation(self,required_separation,mask_flags = False):
         '''
         turn off tones that are too close together
         '''
         last_active_frequency = None
         for resonator in sorted(self.res_class.resonators):
             if not last_active_frequency:#handle first res
-                print("First resonator")
-                last_active_frequency = sorted(self.res_class.resonators)[0].frequency
-                resonator.use = True
+                #print("First resonator")
+                if not mask_flags:
+                    last_active_frequency = sorted(self.res_class.resonators)[0].frequency
+                    resonator.use = True
+                elif len(resonator.flags)>0:
+                    resonator.use = False
+                else:
+                    last_active_frequency = sorted(self.res_class.resonators)[0].frequency
+                    resonator.use = True
             elif resonator.frequency<last_active_frequency+required_separation:
                 print("Turning resonator off")
                 resonator.use = False
             else:
-                print("Leaving resonator on")
-                resonator.use = True
-                last_active_frequency = resonator.frequency
+                if not mask_flags:
+                    print("Leaving resonator on")
+                    resonator.use = True
+                    last_active_frequency = resonator.frequency
+                elif len(resonator.flags)>0:
+                    resonator.use = False
+                else:
+                    resonator.use = True
+                    last_active_frequency = resonator.frequency
 
     def take_noise_set(self,fine_span = 100e3,stream_len = 1024*1024*1024,plot = True,retune = True):
         filenames = []
@@ -699,8 +719,8 @@ class readout(object):
                     center_freqs.append(resonator.frequency)
             else:
                 center_freqs = None
-                    
-            self.iq_sweep_iq_fits = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,
+
+            self.res_set = res_fit.fit_nonlinear_iq_multi(self.iq_sweep_freqs,
                                                                    self.iq_sweep_data,
                                                                    tau = self.tau,
                                                                    center_freqs = np.asarray(center_freqs),
@@ -722,12 +742,13 @@ class readout(object):
             else:
                 center_freqs = None
             for k in tqdm(range(0,self.power_sweep_iq_data.shape[2]),ascii = self.pbar_ascii):
-                fits_dict = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
+                res_set = res_fit.fit_nonlinear_iq_multi(self.power_sweep_iq_freqs[:,:,k],
                                                            self.power_sweep_iq_data[:,:,k],
                                                            tau = self.tau,center_freqs = center_freqs,
                                                            verbose = False)
-                self.power_sweep_iq_fits[:,k,:] = fits_dict['fits']
-                self.power_sweep_fit_iq_data[:,:,k] = fits_dict['fit_results']
+                for m, result in enumerate(res_set):
+                    self.power_sweep_iq_fits[m,k,:] = result[0:9]
+                    self.power_sweep_fit_iq_data[:,m,k] = res_set._fit_results[result].z_fit()
         else:
             print("No power sweep data found")
                 
@@ -745,26 +766,30 @@ class readout(object):
             
     def plot_iq_sweep_fits(self):
         if self.iq_sweep_data is not None:
-            if self.iq_sweep_iq_fits is not None:
-
-                fit_data = np.vstack((self.iq_sweep_iq_fits['fits'][:,:-1].T,self.iq_sweep_iq_fits['Qi'],
-                                      self.iq_sweep_iq_fits['Qc'])).T
-                fit_data[:,0] = fit_data[:,0]/10**6
-                fit_data[:,7] = fit_data[:,7]*10**9
-                data_names = ["Resonator Frequencies (MHz)","Qr","amp","phi","a","i0","q0","tau (ns)","Qi","Qc"]
-
-                multi_sweep_freqs = np.dstack((np.expand_dims(self.iq_sweep_freqs,axis = 2),
-                                               np.expand_dims(self.iq_sweep_freqs,axis = 2)))
-                multi_sweep_z = np.dstack((np.expand_dims(self.iq_sweep_data,axis = 2),
-                                           np.expand_dims(self.iq_sweep_iq_fits['fit_results'],axis = 2)))
-                ip = tune_resonators.interactive_plot(multi_sweep_freqs,multi_sweep_z,retune = False,
-                                                  combined_data = fit_data,
-                                                      combined_data_names = data_names,
-                                                      sweep_labels = ['Data','Fit'])
+            if self.res_set is not None:
+                ip  = self.res_set.plot(flags = self.current_flags())
+                self.update_flags(ip.flags)
             else:
                 print("No fit data found")
         else:
             print("No iq data found")
 
+    def current_flags(self):
+        if self.res_class is not None:
+            current_flags = []
+            for resonator in self.res_class.resonators:
+                if resonator.use:
+                    current_flags.append(resonator.flags)
+            return current_flags
+        else:
+            print("no resonator class found")
+
+    def update_flags(self,flags):
+        if self.res_class is not None:
+            for i, resonator in enumerate(self.res_class.resonators):
+                if resonator.use:
+                    resonator.flags = flags[i]
+        else:
+            print("no resonator class found")
 
             
