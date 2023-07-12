@@ -11,7 +11,7 @@ from submm.instruments import BNC845 as bnc
 from submm.instruments import anritsu_mg3691a as an
 from submm.instruments import weinchel8310 as weinchel
 from submm.lab_brick import core as corelabbrick
-from submm.instruments import cryocon22C as cc
+#from submm.instruments import cryocon22C as cc
 import resonator_class as res_class
 from submm.KIDs import find_resonances_interactive as find_res
 from submm.KIDs import calibrate as cal
@@ -24,6 +24,7 @@ from tqdm import tqdm
 from scipy import signal
 yeses = ['yes','y']
 import sys
+import rfnco as rfnco
 
 class readout(object):
 
@@ -71,9 +72,7 @@ class readout(object):
         self.frequencies = [-19.875*10**6,-50*10**6]
         self.amplitude = 0.4
         #self.lo = hp.synthesizer()
-        self.lo = an.synthesizer()
-        self.lo_freq = 300.00*10**6
-        self.lo.set_frequency(self.lo_freq)
+        #self.lo = an.synthesizer()
         self.data = "udp://10.0.15.11"
         self.iq_sweep_data = None
         self.iq_sweep_data_old = None
@@ -81,12 +80,12 @@ class readout(object):
         #self.output_attenuator = None#weinchel.attenuator()
         self.input_attenuator = corelabbrick.Attenuator(0x41f,0x1208,11874)
         self.output_attenuator = corelabbrick.Attenuator(0x41f,0x1208,11875)
-        self.BB = cc.temp_control()
+        #self.BB = cc.temp_control()
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
         self.tau = 66*10**-9
         self.stream_data = None
-        self.data_dir = "/data/multitone_data/20232017_10nm_Ti_2nm_TiN_bilayer_opitcal/"
+        self.data_dir = "/data/multitone_data/20230518_CCAT_280GHz_array_2_dark/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -106,6 +105,10 @@ class readout(object):
                                                                  verbose=self.debug, quiet=self.quiet)
             self.ctrlif.debug = [self.insane, self.show_access]
 
+            self.lo = rfnco.rfnco("rfrtconfa",self.ctrlif,self.dataif,self.eids)
+            self.lo_freq = 650.00*10**6
+            self.lo.set_frequency(self.lo_freq)
+            
             self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
             #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
             self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)  
@@ -173,6 +176,8 @@ class readout(object):
             print("wfplayer freq res = %10.6f kHz" % (self.wfplayer.get_tone_freq_res() / 1000))
             print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
             print()
+
+            
 
     def variables(self):
         print("readout object's variables")
