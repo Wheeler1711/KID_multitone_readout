@@ -60,7 +60,7 @@ class readout(object):
         self.quiet = True
         self.insane = False
         self.regaccess = False
-        self.show_access = True
+        self.show_access = False
         self.debug = False
         self.verbose = False
         self.group = 0
@@ -85,7 +85,7 @@ class readout(object):
         self.vna_data = None
         self.tau = 66*10**-9
         self.stream_data = None
-        self.data_dir = "/data/multitone_data/20230518_CCAT_280GHz_array_2_dark/"
+        self.data_dir = "/data/multitone_data/20230822_CCAT_led_map_array_1/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -106,8 +106,11 @@ class readout(object):
             self.ctrlif.debug = [self.insane, self.show_access]
 
             self.lo = rfnco.rfnco("rfrtconfa",self.ctrlif,self.dataif,self.eids)
-            self.lo_freq = 650.00*10**6
+            self.lo_freq = 896.0*10**6#814.00*10**6
             self.lo.set_frequency(self.lo_freq)
+            # the other lo for doing sweeps
+            self.fset = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":fullset:", 'fset0')
+            self.tonegen = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":tonegen:", 'fset0')
             
             self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
             #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
@@ -127,6 +130,10 @@ class readout(object):
             print("samplerate = %8.3f MHz   iqorder = %d" % (self.samplerate/1e6, self.iqorder))
             print()
 
+            (self.tonegen.samplerate, self.tonegen.iqorder) = (self.samplerate, self.iqorder)
+            self.tonegen.set_i(amp = 0.5, mode = "ddstaylor-i", phase=0)
+            self.tonegen.set_q(amp = 0.5, mode = "ddstaylor-q", phase=-90)
+            print( self.tonegen.get_i(), self.tonegen.get_q() )
         
             # stop flow of data
             self.frontend.write_monstop(1)
@@ -177,7 +184,6 @@ class readout(object):
             print("frontend freq res = %10.6f kHz" % (self.frontend.get_chan_freq_res() / 1000))
             print()
 
-            
 
     def variables(self):
         print("readout object's variables")
@@ -207,14 +213,13 @@ class readout(object):
             phase = np.random.uniform(0., 360, len(frequencies))
         else:
             phase = np.zeros(len(frequencies))
-        
-        
+
         n_tones = len(frequencies)
         self.merge = 1001//n_tones #how many samples in a packet
         print("merge = "+str(self.merge))
-        
+
         self.frontend.change_output(self.output, self.merge, self.decimate)
-        
+
         self.real_freq_list = []
         self.wfplayer.del_tone(groupid = self.group)
         for i in range(0,len(frequencies)):
@@ -222,10 +227,10 @@ class readout(object):
             self.real_freq_list.append(self.wfplayer.get_tone(self.group,i)[0])
 
         self.wfplayer.write_tone_list()
-        
+
         if fill_DAQ_range: # this is ineffecient currently writing tones to board twice
             maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
-            scale_factor = (0.9*(2**16//2-1))/maximum_of_wave 
+            scale_factor = (0.9*(2**16//2-1))/maximum_of_wave
             amplitude = amplitude*scale_factor
             self.real_freq_list = []
             self.wfplayer.del_tone(groupid = self.group)
@@ -236,8 +241,8 @@ class readout(object):
             maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
             if maximum_of_wave>0.95*(2**16//2-1):
                 print("!!!!Warning you may be clipping DAC waverform!!!!")
-            
-        # old way with list 
+
+        # old way with list
         #self.real_freq_list = self.wfplayer.set_tone_list(self.group, frequencies, write=True, amp=amplitude[0])
         self.chanlist = self.frontend.set_chan_list(self.group, self.real_freq_list, write=True)
         self.binnolist = [ self.frontend.get_chan(self.group, i)[1] for i in self.chanlist ]
@@ -256,20 +261,33 @@ class readout(object):
             self.iq_sweep_data_old = self.iq_sweep_data
             self.iq_sweep_freqs_old = self.iq_sweep_freqs
         to_read = int(1024*8*average_time*self.data_rate/self.merge)//(1024*8)*1024*8
-        self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
+        #self.iq_sweep_freqs_lo = np.linspace(self.lo_freq-span/2+offset,self.lo_freq+span/2+offset,npts)
+        self.iq_sweep_freqs_lo = np.linspace(-span/2+offset,span/2+offset,npts)
         self.iq_sweep_freqs = np.zeros((npts,len(self.real_freq_list)))
-        for m in range(0,len(self.real_freq_list)):
-            self.iq_sweep_freqs[:,m] = self.iq_sweep_freqs_lo+self.real_freq_list[m]
+        #for m in range(0,len(self.real_freq_list)):
+        #    self.iq_sweep_freqs[:,m] = self.iq_sweep_freqs_lo+self.real_freq_list[m]
         self.iq_sweep_data = np.zeros((len(self.iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
-        for n, freq in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts,leave = leave,ascii = self.pbar_ascii):
-            self.lo.set_frequency(freq)
-            time.sleep(0.1)
-            self.lo.get_frequency()
+        self.fset.write_mixmode(0xf25af2a5)
+
+        actual_iq_sweep_freqs = np.asarray(())
+        
+        for n, nominalf in tqdm(enumerate(self.iq_sweep_freqs_lo),total = npts,leave = leave,ascii = self.pbar_ascii):
+            self.tonegen.set_i(freq = nominalf); self.tonegen.set_q(freq = nominalf);
+            time.sleep(0.01)
+            curr_freq = self.tonegen.get_i()[0]#self.lo.get_frequency()                                                                                         
+            actual_iq_sweep_freqs = np.append(actual_iq_sweep_freqs,curr_freq)
+            #self.lo.set_frequency(freq,verbose = True)
+            #time.sleep(0.1)
+            #self.lo.get_frequency()
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
-        self.lo.set_frequency(self.lo_freq)
+        for m in range(0,len(self.real_freq_list)):                                                                                                             
+            self.iq_sweep_freqs[:,m] = self.lo_freq + actual_iq_sweep_freqs+self.real_freq_list[m]  
+        #self.lo.set_frequency(self.lo_freq)
+        self.fset.write_mixmode(0x00010001)
+        time.sleep(0.1)
         if fit:
             self.fit_iq_sweep()
         elif plot:
@@ -291,7 +309,8 @@ class readout(object):
                                                   combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
                                                          combined_data_names = ["Resonator Frequencies (MHz)"],
                                                          flags = self.current_flags())
-                    self.update_flags(ip.flags)
+                    if ip.flags is not None:
+                        self.update_flags(ip.flags)
                 else:
                     print("only one iq sweep data set found cannot plot two")
         else:
@@ -319,15 +338,14 @@ class readout(object):
                     new_frequencies_index += 1
         if write_resonator_tones:
             self.write_resonator_tones()
-            
-            
 
-    def vna_sweep(self,start,stop,resolution = 1*10**3,average_time = 0.1,min_tone_spacing = 0.2*10**6,plot = True):
+
+    def vna_sweep(self,start,stop,resolution = 1*10**3,average_time = 0.1,min_tone_spacing = 0.2*10**6, plot=True, set_freqs=True):
         '''
         Pretend we are vna for finding resonances
         currently limited to putting tone ~10MHz apart
         '''
-        n_tones = (stop-start)//(int(min_tone_spacing))+1
+        n_tones = int(stop-start)//(int(min_tone_spacing))+1
         if n_tones >1001:
             n_tones = 1001
         print("Using "+str(n_tones)+" for VNA sweep")
@@ -337,32 +355,46 @@ class readout(object):
             self.frequencies = list(np.linspace(start-self.lo_freq,stop-self.lo_freq,n_tones))
         tone_spacing = self.frequencies[1]-self.frequencies[0]
         npts = int(tone_spacing//resolution)
-        
-        iq_sweep_freqs = np.linspace(self.lo_freq-tone_spacing/2,self.lo_freq+tone_spacing/2,npts)        
 
-        self.set_frequencies(self.frequencies,amplitude = 0.8/n_tones)
-        
+        #iq_sweep_freqs = np.linspace(self.lo_freq-tone_spacing/2,self.lo_freq+tone_spacing/2,npts)
+        iq_sweep_freqs = np.linspace(-tone_spacing/2,tone_spacing/2,npts) 
+        if set_freqs:
+            self.set_frequencies(self.frequencies,amplitude = 0.8/n_tones)
+
         self.vna_freqs = np.asarray(())
-        for m in range(0,len(self.real_freq_list)):
-            self.vna_freqs = np.append(self.vna_freqs,self.real_freq_list[m]+iq_sweep_freqs)
+        #for m in range(0,len(self.real_freq_list)):
+        #    self.vna_freqs = np.append(self.vna_freqs,self.real_freq_list[m]+iq_sweep_freqs)
 
         # 1 packet is 8k = 1024*8 each pa
         to_read = int(1024*8*average_time*self.data_rate/self.merge)//(1024*8)*1024*8 # at some point should turn this into an integration time
-        print(to_read)         
+        print(to_read)
         iq_sweep_data = np.zeros((len(iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
 
         pbar = tqdm(enumerate(iq_sweep_freqs),total = len(iq_sweep_freqs),ascii=self.pbar_ascii)
-        for n, freq in pbar:
-            self.lo.set_frequency(freq)
-            time.sleep(0.01)
-            curr_freq = self.lo.get_frequency()
+
+        self.fset.write_mixmode(0xf25af2a5)
+
+        actual_iq_sweep_freqs = np.asarray(())
+        for n, nominalf in pbar:
+            #self.lo.set_frequency(freq)
+            #print(nominalf)
+            self.tonegen.set_i(freq = nominalf); self.tonegen.set_q(freq = nominalf);
+            time.sleep(0.001)
+            curr_freq = self.tonegen.get_i()[0]#self.lo.get_frequency()
+            actual_iq_sweep_freqs = np.append(actual_iq_sweep_freqs,curr_freq)
             pbar.set_description(f'{"%3.3f" % (curr_freq/10**6)} MHz')
             #print(str(curr_freq/10**6)+" MHz")
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
                 iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
-        self.vna_data = np.asarray(()) 
+        self.fset.write_mixmode(0x00010001)
+                
+        for m in range(0,len(self.real_freq_list)):                                                                                                            
+            self.vna_freqs = np.append(self.vna_freqs,self.lo_freq+self.real_freq_list[m]+actual_iq_sweep_freqs)
+        
+
+        self.vna_data = np.asarray(())
         for m in range(0,len(self.real_freq_list)):
             self.vna_data = np.append(self.vna_data,iq_sweep_data[:,m])
 
@@ -371,13 +403,13 @@ class readout(object):
 
 
     def get_stream_data(self,stream_time= 60):
-        self.lo.set_frequency(self.lo_freq) #make sure LO is back at nominal frequency
+        #self.lo.set_frequency(self.lo_freq) #make sure LO is back at nominal frequency
         time.sleep(0.1)
         stream_len = int(1024*8*stream_time*self.data_rate/self.merge)//(1024*8)*1024*8
         self.stream_data = self.get_data(stream_len,verbose = False)
         self.stream_frequencies = [freq + self.lo_freq for freq in self.real_freq_list]
 
-        
+
     def plot_iq_and_stream(self,decimate = 1000):#eventualy decimate -> frequency
         # decimate only handels 1 sig fig i.e 2000 no 2500
         if self.stream_data is not None:
@@ -388,7 +420,7 @@ class readout(object):
                     self.decimated_stream_data = signal.decimate(self.decimated_stream_data,10,axis = 0)
                 self.decimated_stream_data = signal.decimate(self.decimated_stream_data,
                                                              decimate//(10**factors_of_10),axis =0)
-                    
+
                 ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data,
                                                       stream_data = self.decimated_stream_data,
                                                       retune = False,flags = self.current_flags())
@@ -397,8 +429,8 @@ class readout(object):
                 print("No IQ sweep data found: unable to plot")
         else:
             print("No stream data found: unable to plot")
-        
-        
+
+
     def plot_vna_sweep(self):
         plt.figure(1)
         plt.plot(self.vna_freqs/10**6,20*np.log10(np.abs(self.vna_data)))
@@ -433,7 +465,7 @@ class readout(object):
             filename_suffix+"."+self.iq_sweep_save_filename.split(".")[1]
         data_io.write_iq_sweep_data(save_filename,self.iq_sweep_freqs,self.iq_sweep_data)
         return save_filename
-        
+
     def load_iq_data(self,filename = None):
         if not filename:
             list_of_files = glob.glob(self.data_dir+'/*'+self.iq_sweep_save_filename)
@@ -619,17 +651,39 @@ class readout(object):
                     resonator.use = True
                     last_active_frequency = resonator.frequency
 
-    def take_noise_set(self,fine_span = 100e3,stream_time= 60,plot = True,retune = True):
+    def mask_collisions(self,required_separation,mask_flags = False):
+        '''                                                                                                                                                     
+        turn off tones that are too close together                                                                                                              
+        '''
+        frequencies = np.asarray(self.res_class.all_frequencies())
+        distance_left = np.abs(frequencies - np.roll(frequencies,-1))
+        distance_right = np.abs(frequencies - np.roll(frequencies,1))
+        for i, resonator in enumerate(self.res_class.resonators):
+            if distance_left[i] < required_separation:
+                resonator.use = False
+                print(resonator.frequency,"Turning resonator off")
+            elif distance_right[i] < required_separation:
+                resonator.use = False
+                print(resonator.frequency,"Turning resonator off")
+            elif mask_flags and len(resonator.flags)>0:
+                resonator.use = False
+                print(resonator.frequency,"Turning resonator off")
+            else:
+                resonator.use = True
+                print(resonator.frequency,"Turning resonator on")
+   
+                    
+    def take_noise_set(self,fine_span = 100e3,stream_time= 60,average_time = 0.1,plot = True,retune = True):
         filenames = []
         if retune:
             print("Taking tuning iq sweep")
-            self.iq_sweep(fine_span,plot = False)
+            self.iq_sweep(fine_span,average_time = average_time,plot = False)
             self.retune_resonators()
         #print("taking gain sweep")
         #self.iq_sweep(gain_span,plot = False)
         #filenames.append(self.save_iq_data())
         print("taking iq sweep")
-        self.iq_sweep(fine_span,plot = False)
+        self.iq_sweep(fine_span,average_time = average_time,plot = False)
         filenames.append(self.save_iq_data())
         print("taking streaming data")
         self.get_stream_data(stream_time)
@@ -825,8 +879,17 @@ class readout(object):
             print("no resonator class found")
 
             
-    def quick_power_tune(self):
+    def quick_power_tune(self,range_limit =10):
+        if self.normalizing_amplitudes is None:
+            self.normalizing_amplitudes = np.ones(self.iq_sweep_data.shape[1])
         pow_factor = []
-        for fit in self.res_set.fits:
-            pow_factor.append(0.5/fit.a)
-        self.normalizing_amplitudes = self.normalizing_amplitudes*np.sqrt(np.asarray(pow_factor))
+        for i, fit in enumerate(self.res_set):
+            if fit.a >0.1:
+                pow_factor.append(0.5/fit.a)
+            else:
+                pow_factor.append(5) # if two low turn up power by 3dB
+        pow_factor = np.asarray(pow_factor)
+        median_pow_factor = np.median(pow_factor)
+        index_high = np.where(pow_factor>median_pow_factor*np.sqrt(range_limit))
+        pow_factor[index_high] = median_pow_factor*range_limit
+        self.normalizing_amplitudes = self.normalizing_amplitudes*np.sqrt(pow_factor)
