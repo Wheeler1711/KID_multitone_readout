@@ -25,3 +25,10 @@ class resonators_class: # plural
                 count += 1
 
         return count
+
+    def all_frequencies(self):
+        frequency_list =  []
+        for resonator in self.resonators:
+            frequency_list.append(resonator.frequency)
+
+        return frequency_list
