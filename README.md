@@ -95,3 +95,5 @@ choosable non-linearity parameter tune_powers()
 
 instruction on plot for tune_powers()
 
+normalizing_amplitudes to res_class
+
