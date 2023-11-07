@@ -70,7 +70,8 @@ currently, you need to import the polcal class into your python terminal and giv
 
 ```
 from detchar import polcal_mkid as polcal
-polcal_sweeper = PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linsapce(0,360,360//5+1),num_lockin_periods = 50) #five degree steps
+import numpy as np
+polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linspace(0,360,360//5+1),num_lockin_periods = 50) #five degree steps
 polcal_sweeper.get_polcal(filename_suffix = "_5_degree_spacing",iq_sweep_all = False)
 ```
 
@@ -96,4 +97,6 @@ choosable non-linearity parameter tune_powers()
 instruction on plot for tune_powers()
 
 normalizing_amplitudes to res_class
+
+individual_folder for pol
 
