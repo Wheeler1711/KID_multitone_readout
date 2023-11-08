@@ -80,7 +80,7 @@ If you need to reinitialize the polcal_sweeper, you have to close the connection
 polcal_sweeper.source.fg.close()
 import importlib # if you changed the code otherwise skip this and the next line
 importlib.reload(polcal)
-polcal_sweeper = PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linsapce(0,360,360//5+1),num_lockin_periods = 50)
+polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linsapce(0,360,360//5+1),num_lockin_periods = 50)
 ```
 
 
