@@ -30,6 +30,18 @@ readout.fit_power_sweep()
 readout.tune_powers()
 ```
 
+
+If you need to restart the code you can get back to the same setting using the following
+```
+import multitone_readout as mr
+readout = mr.readout()
+readout.load_res_class()
+readout.normalizing_amplitudes = np.load("normalizing_amplitudes.npy")
+readout.write_resonator_tones()
+readout.iq_sweep()
+readout.retune_resonators(find_min = True)
+```
+
 # Finding resonators
 
 # Tuning powers
