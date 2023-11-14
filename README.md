@@ -106,6 +106,8 @@ plot show current res_class
 
 choosable non-linearity parameter tune_powers()
 
+calibrate_polcal.py and polcal.get_polcal: the first iq_sweep file is not saved to the same new directory 
+
 instruction on plot for tune_powers()
 
 normalizing_amplitudes to res_class
