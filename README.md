@@ -102,7 +102,7 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 ```
 
 
-# Reset frsoc in linux (for example after power outage) 
+# Reset rfsoc in linux (for example after power outage) 
 ```
 busybox telnet 192.168.4.11       # log in to rpi
 busybox telnet 192.168.6.11       # log in to rfsoc 
