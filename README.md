@@ -42,6 +42,12 @@ readout.iq_sweep()
 readout.retune_resonators(find_min = True)
 ```
 
+If you want to clear the resonators and start over 
+```
+readout.res_class = resonator_class.resonators_class([])
+```
+
+
 # Finding resonators
 
 # Tuning powers
