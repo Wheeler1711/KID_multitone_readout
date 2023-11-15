@@ -13,14 +13,14 @@ readout = mr.readout()
 help(readout)
 Press Q to exit
 readout.vna_sweep(400e6,900e6)
-readout.find_resonators()
+readout.find_resonators() # Select smoothing for the baseline removal and press Q (opens a new window)
 readout.res_class # to inspect res_class
 readout.save_res_class()
 readout.mask_collisions(1e6)
 readout.save_res_class()
 readout.write_resonator_tones()
 readout.iq_sweep(span = 200e3)
-# if the power is too high turn donw input attenuator
+# if the power is too high turn down input attenuator
 readout.input_attenuator.set_attenuation(10)
 readout.iq_sweep()
 readout.retune_resonators(find_min = True)
@@ -96,6 +96,13 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 ```
 
 
+# Reset frsoc in linux (for example after power outage) 
+```
+busybox telnet 192.168.4.11       # log in to rpi
+busybox telnet 192.168.6.11       # log in to rfsoc 
+busybox telnet 192.168.4.11 3021  # look at rfsoc in linux console
+ping 192.168.6.11                 # Check connection 
+```
 
 # To Do list
 Gui for configure
