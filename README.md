@@ -122,7 +122,7 @@ ping 192.168.6.11                 # Check connection
 # Useful general commands 
 ```
 df -T              # shows available and used memory, FPGA output 250 kS/s, so space can run out
-nmcli device show  # list all devices connected 
+nmcli device show  # lists all devices connected 
 ```
 
 # To Do list
@@ -138,6 +138,6 @@ instruction on plot for tune_powers()
 
 normalizing_amplitudes to res_class
 
-in polcal.BeamMapSingleGridAngle(...): home_xy == True -> Setting leaves the code hanging sometimes 
+in polcal.BeamMapSingleGridAngle(): home_xy == True -> Setting leaves the code hanging sometimes 
 
 
