@@ -103,11 +103,11 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 
 # Polcal - rotation and XY mapping 
 ```
+from detchar import polcal_mkid as polcal
 xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
 grid_angle = 0; # Set the polarization angle (deg)
-polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_5mm_step", home_xy = True, num_lockin_perids = 50)
+polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_perids = 50, wait_s = 3) # Default wait_s = 0.1 seconds which is too fast
 polcal_sweeper.acquire()
-
 ```
 
 
@@ -128,11 +128,8 @@ plot show current res_class
 
 choosable non-linearity parameter tune_powers()
 
-calibrate_polcal.py and polcal.get_polcal: the first iq_sweep file is not saved to the same new directory 
-
 instruction on plot for tune_powers()
 
 normalizing_amplitudes to res_class
 
-individual_folder for pol
 
