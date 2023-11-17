@@ -82,7 +82,7 @@ Since the fitting never works perfectly, after the data have been analyzed an in
 
 # Taking streaming data
 
-# Doing Polcal
+# Polcal - rotation only 
 currently, you need to import the polcal class into your python terminal and give it the readout class
 
 
@@ -99,6 +99,15 @@ polcal_sweeper.source.fg.close()
 import importlib # if you changed the code otherwise skip this and the next line
 importlib.reload(polcal)
 polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linsapce(0,360,360//5+1),num_lockin_periods = 50)
+```
+
+# Polcal - rotation and XY mapping 
+```
+xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
+grid_angle = 0; # Set the polarization angle (deg)
+polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_5mm_step", home_xy = True, num_lockin_perids = 50)
+polcal_sweeper.acquire()
+
 ```
 
 
