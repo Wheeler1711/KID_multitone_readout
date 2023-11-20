@@ -116,7 +116,8 @@ polcal_sweeper.acquire()
 # Calibrate and average polcal data 
 ```
 # Multitone readout measures 250 kS/s
-# Cliabration routine reduces it to 1 kS/s
+# Calibration routine reduces it to 1 kS/s
+# Folder needs to be inerted manually in the code 
 #
 python calibrate_polcal.py 
 ```
