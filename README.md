@@ -83,8 +83,9 @@ Since the fitting never works perfectly, after the data have been analyzed an in
 # Taking streaming data
 
 # Polcal - rotation only 
-currently, you need to import the polcal class into your python terminal and give it the readout class
+The alignment of the source is very important! If the source is on the XY stage (even if you would not do beam mapping) please set the XY stage first to home and reset it to (0, 0). It is very easy to loose the coordinates. 
 
+Currently, you need to import the polcal class into your python terminal and give it the readout class
 
 ```
 from detchar import polcal_mkid as polcal
@@ -104,6 +105,7 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 ```
 
 # Polcal - rotation and XY mapping 
+The alignment of the source is very important! Please set home_xy =True to make sure you don't loose the coordinates. 
 ```
 from detchar import polcal_mkid as polcal
 xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
