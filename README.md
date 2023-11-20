@@ -112,7 +112,7 @@ polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, fil
 # Do not change this directory name afterwards, calibration routine may break 
 polcal_sweeper.acquire()
 ```
-If you want to move the xy-stage in absolute coodinates (mm) referenced to "home" (0, 0)
+If you want to move the xy-stage in absolute coordinates (mm) referenced to "home" (0, 0)
 ```
 polcal_sweeper.xy.move_absolute(340, 350, 5, 5);
 ```
