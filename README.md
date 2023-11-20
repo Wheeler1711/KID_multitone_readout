@@ -91,6 +91,7 @@ from detchar import polcal_mkid as polcal
 import numpy as np
 polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linspace(0,360,360//5+1),num_lockin_periods = 50) #five degree steps
 polcal_sweeper.get_polcal(filename_suffix = "_5_degree_spacing",iq_sweep_all = False)
+# Do not change this directory name afterwards, calibration routine may break 
 ```
 
 If you need to reinitialize the polcal_sweeper, you have to close the connection to the function generator
@@ -98,7 +99,8 @@ If you need to reinitialize the polcal_sweeper, you have to close the connection
 polcal_sweeper.source.fg.close()
 import importlib # if you changed the code otherwise skip this and the next line
 importlib.reload(polcal)
-polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linsapce(0,360,360//5+1),num_lockin_periods = 50)
+polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linspace(0,360,360//5+1),num_lockin_periods = 50)
+# Do not change this directory name afterwards, calibration routine may break 
 ```
 
 # Polcal - rotation and XY mapping 
@@ -107,8 +109,19 @@ from detchar import polcal_mkid as polcal
 xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
 grid_angle = 0; # Set the polarization angle (deg)
 polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_perids = 50, wait_s = 3) # Default wait_s = 0.1 seconds which is too fast
+# Do not change this directory name afterwards, calibration routine may break 
 polcal_sweeper.acquire()
 ```
+
+# Calibrate and average polcal data 
+```
+# Multitone readout measures 250 kS/s
+# Cliabration routine reduces it to 1 kS/s
+#
+python calibrate_polcal.py 
+```
+
+
 
 
 # Reset rfsoc in linux (for example after power outage) 
@@ -121,8 +134,12 @@ ping 192.168.6.11                 # Check connection
 
 # Useful general commands 
 ```
-df -T              # shows available and used memory, FPGA output 250 kS/s, so space can run out
-nmcli device show  # lists all devices connected 
+df -T                        # shows available and used memory, FPGA output 250 kS/s, so space can run out
+nmcli device show            # lists all devices connected
+df /                         # returns the recycling bin location, in our case ~./dev/nvme0n1p2
+sudo debugfs dev/nvme0n1p2   # opens debugfs 
+lsdel                        # lists deleted files
+q                            # exits debugfs
 ```
 
 # To Do list
