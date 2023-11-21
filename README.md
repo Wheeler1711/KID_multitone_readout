@@ -46,7 +46,10 @@ If you want to clear the resonator list and start over
 ```
 readout.res_class = resonator_class.resonators_class([])
 ```
-
+If you want to load a previous list of resonators 
+```
+readout.res_class = np.load("YYMMDD_HHMMSS_resonators.csv"); 
+```
 
 # Finding resonators
 
