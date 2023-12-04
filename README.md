@@ -143,10 +143,48 @@ python calibrate_polcal.py
 
 # Reset rfsoc in linux (for example after power outage) 
 ```
-busybox telnet 192.168.4.11       # log in to rpi
-busybox telnet 192.168.6.11       # log in to rfsoc 
-busybox telnet 192.168.4.11 3021  # look at rfsoc in linux console
-ping 192.168.6.11                 # Check connection 
+busybox telnet 192.168.4.11            # log in to Raspberry pi
+  login: root
+  echo 0 > /sys/class/gpio/gpio5/value 
+  echo 1 > /sys/class/gpio/gpio5/value # Reset Raspberry pi remotely 
+busybox telnet 192.168.6.11            # log in to rfsoc (not necessary, Raspberry pi controls rfsoc) 
+busybox telnet 192.168.4.11 3021       # look at rfsoc in linux console
+ping 192.168.6.11                      # Check connection 
+```
+
+# Move large folders from Linux to Windows
+```
+# ----- On Linux ----- 
+
+# list all files with '*cal.p' extension in a folder
+ls -l folder_name
+
+# Check free space available in tmp folder 
+df -h /tmp/ 
+
+# Create a zip file to temporary /tmp/ folder (all files with '*cal.p' extension) 
+zip -r /tmp/folder_name.zip folder_name/*_cal.p
+
+# Check the size of the created zip file 
+du -ms /tmp/folder_name.zip 
+
+# ----- On Windows Powershell ----- 
+# Connect SSH
+ssh -l pcuser 687hawc
+
+# Go to the folder where you want to copy the .zip folder 
+PS Z:> scp pcuser@687hawc:/tmp/folder_name.zip ./ 
+
+
+# ----- On Linux ----- 
+# Check how much space available in /tmp/ folder
+df -h /tmp/
+
+# Check the folder size in /tmp/
+du -ms /tmp/20231121__xy_45deg_5mm_step_round1.zip
+
+# /tmp/ folder is not large, you might need to remove folders at some point 
+rm -vi /tmp/20231121__xy_45deg_5mm_step_round1.zip 
 ```
 
 # Useful general commands 
@@ -157,6 +195,8 @@ df /                         # returns the recycling bin location, in our case ~
 sudo debugfs dev/nvme0n1p2   # opens debugfs 
 lsdel                        # lists deleted files
 q                            # exits debugfs
+
+# Moving large data using ssh
 ```
 
 # To Do list
