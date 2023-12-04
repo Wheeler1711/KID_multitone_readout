@@ -180,11 +180,8 @@ PS Z:> scp pcuser@687hawc:/tmp/folder_name.zip ./
 # Check how much space available in /tmp/ folder
 df -h /tmp/
 
-# Check the folder size in /tmp/
-du -ms /tmp/20231121__xy_45deg_5mm_step_round1.zip
-
 # /tmp/ folder is not large, you might need to remove folders at some point 
-rm -vi /tmp/20231121__xy_45deg_5mm_step_round1.zip 
+rm -vi /tmp/folder_name.zip 
 ```
 
 # Useful general commands 
