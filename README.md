@@ -151,6 +151,11 @@ busybox telnet 192.168.6.11            # log in to rfsoc (not necessary, Raspber
 busybox telnet 192.168.4.11 3021       # look at rfsoc in linux console
 ping 192.168.6.11                      # Check connection 
 ```
+# Remote view of Linux using RealVNC Viewer (Windows Powershell)
+```
+vncserver -geometry 1600x1000 :3
+```
+
 
 # Move large folders from Linux to Windows
 ```
@@ -192,8 +197,6 @@ df /                         # returns the recycling bin location, in our case ~
 sudo debugfs dev/nvme0n1p2   # opens debugfs 
 lsdel                        # lists deleted files
 q                            # exits debugfs
-
-# Moving large data using ssh
 ```
 
 # To Do list
