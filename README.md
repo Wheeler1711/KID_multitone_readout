@@ -91,6 +91,11 @@ Since the fitting never works perfectly, after the data have been analyzed an in
 
 
 # Taking streaming data
+Monitor/Take stream data 
+```
+readout.monitor(); # If you want to see roughly what's going on
+readout.take_noise_data(downsampling = 1); # Saves the downsampled data. When downsampling = 1, the sample rate is 250 kS/s
+```
 
 # Polcal - rotation only 
 The alignment of the source is very important! If the source is on the XY stage (even if you would not do beam mapping) please set the XY stage first to home and reset it to (0, 0). It is very easy to loose the coordinates. 
