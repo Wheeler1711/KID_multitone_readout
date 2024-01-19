@@ -101,7 +101,7 @@ Currently, you need to import the polcal class into your python terminal and giv
 from detchar import polcal_mkid as polcal
 import numpy as np
 polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_list = np.linspace(0,360,360//5+1),num_lockin_periods = 50) #five degree steps
-polcal_sweeper.get_polcal(filename_suffix = "_5_degree_spacing",iq_sweep_all = False)
+polcal_sweeper.get_polcal(filename_suffix = "_5_degree_spacing",iq_sweep_all = False, downsampling=250) # Downsampling is a new feature
 # Do not change this directory name afterwards, calibration routine may break 
 ```
 
@@ -122,7 +122,7 @@ xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), 
 grid_angle = 0; # Set the polarization angle (deg)
 polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_perids = 50, wait_s = 3) # Default wait_s = 0.1 seconds which is too fast
 # Do not change this directory name afterwards, calibration routine may break 
-polcal_sweeper.acquire()
+polcal_sweeper.acquire(downsampling=250) # Downsampling isa new feature
 ```
 If you want to move the xy-stage in absolute coordinates (mm) referenced to "home" (0, 0)
 ```
@@ -197,6 +197,7 @@ df /                         # returns the recycling bin location, in our case ~
 sudo debugfs dev/nvme0n1p2   # opens debugfs 
 lsdel                        # lists deleted files
 q                            # exits debugfs
+cp xxx.txt /tmp/xxx.txt      # copy to a temporary folder 
 ```
 
 # To Do list
