@@ -12,7 +12,9 @@ import multitone_readout as mr
 readout = mr.readout()
 help(readout)
 Press Q to exit
-readout.vna_sweep(400e6,900e6)
+readout.vna_sweep(400e6,1200e6, average_time = 0.001, min_tone_spacing = 20e6) # Varies depending on the MKID array (power is distributed between tones)
+readout.input_attenuator.set_attenuation(0); # May vary depending on the setup, in the first time the input attenuator was bypassed  
+readout.output_attenuation.set_attenuation(25); # May vary depending on the setup 
 readout.find_resonators() # Select smoothing for the baseline removal and press Q (opens a new window)
 readout.res_class # to inspect res_class
 readout.save_res_class()
