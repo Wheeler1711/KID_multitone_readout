@@ -145,7 +145,10 @@ polcal_sweeper.xy.move_absolute(340, 350, 5, 5);
 python calibrate_polcal.py 
 ```
 
-
+# Enable TTL and check inputs and outputs
+```
+pktsrcsel.py udp://10.0.15.11 timestamp=ENABLED
+```
 
 
 # Reset rfsoc in linux (for example after power outage) 
