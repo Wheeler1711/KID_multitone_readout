@@ -147,9 +147,11 @@ python calibrate_polcal.py
 
 # Enable TTL and check inputs and outputs
 ```
-pktsrcsel.py udp://10.0.15.11 timestamp=ENABLED
+pktsrcsel.py udp://10.0.15.11 timestamp=ENABLED                    # Enables timestamp 
+eidtest.py --ctrl=udp://10.0.15.11 -d | grep -e riseen -e fallen   # Gives the IDs for fallng and rising edge trigger signals
+# fallen = 2147483648
+# riseen = 3221225472
 ```
-
 
 # Reset rfsoc in linux (for example after power outage) 
 ```
