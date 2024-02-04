@@ -164,7 +164,14 @@ busybox telnet 192.168.4.11 3021       # look at rfsoc in linux console
 ping 192.168.6.11                      # Check connection
 
 ifconfig eno2:1 192.168.30.21/24 up    # Connect XY stage via Ethernet 
-ping 192.168.30.100                    # Check connection 
+ping 192.168.30.100                    # Check connection
+
+busybox telnet 192.168.0.231           # Remote connect to power connectors
+pset 5 1
+pset 6 1
+pset 17 1                              # etc.
+logout
+
 ```
 # Remote view of Linux using RealVNC Viewer (Windows Powershell)
 ```
