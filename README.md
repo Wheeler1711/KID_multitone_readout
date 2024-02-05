@@ -159,9 +159,14 @@ busybox telnet 192.168.4.11            # log in to Raspberry pi
   login: root
   echo 0 > /sys/class/gpio/gpio5/value 
   echo 1 > /sys/class/gpio/gpio5/value # Reset Raspberry pi remotely 
-busybox telnet 192.168.6.11            # log in to rfsoc (not necessary, Raspberry pi controls rfsoc) 
+busybox telnet 192.168.6.11            # log in to rfsoc (not necessary, Raspberry pi controls rfsoc)
+
+# Start-up commands for FPGA and Raspberry PI 
+regrw.py udp://10.0.15.11 0x08000018=0x6a777787 0x08000048=0x5154 0x08000050=0xf25af2a5  0x09000018=0x67777701
+ncoconf.py udp://10.0.15.11 .DAC=896e6 .ADC=-896e6
 busybox telnet 192.168.4.11 3021       # look at rfsoc in linux console
 ping 192.168.6.11                      # Check connection
+
 
 ifconfig eno2:1 192.168.30.21/24 up    # Connect XY stage via Ethernet 
 ping 192.168.30.100                    # Check connection
