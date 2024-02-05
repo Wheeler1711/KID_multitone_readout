@@ -28,6 +28,7 @@ readout.iq_sweep()
 readout.retune_resonators(find_min = True)
 readout.iq_sweep()
 readout.power_sweep(20,0,2,span = 200e3,npts = 201)
+readout.dac_power_sweep(20, 0, 2) # Directly scaling the FPGA generated waveform
 readout.fit_power_sweep()
 readout.tune_powers()
 ```
