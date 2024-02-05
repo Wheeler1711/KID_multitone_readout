@@ -7,12 +7,17 @@ import resonator_class as resonator_class
 
 vna_header = "# Header:freq_Hz,real,imag"
 
-def write_vna_data(output_filename,freqs,z,meta_data = None):
-    with open(output_filename,'w') as f:
-        #if metadata is not None:
-        #    f.write(F"{metadata}\n")
-        for f_value, real, imag in list(zip(freqs, np.real(z),np.imag(z))):
-            f.write(F"{f_value},{real},{imag}\n")
+def write_vna_data(output_filename,freqs,z,meta_data = None,save_as_pickle = False):
+    if save_as_pickle:
+        dict = {'freqs':freqs,'z':z,'meta_data':meta_data}
+        with open(output_filename+".p", 'wb') as f:
+            pickle.dump(dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        with open(output_filename+".csv",'w') as f:
+            #if metadata is not None:
+            #    f.write(F"{metadata}\n")
+            for f_value, real, imag in list(zip(freqs, np.real(z),np.imag(z))):
+                f.write(F"{f_value},{real},{imag}\n")
 
 def read_vna_data(input_filename):
     freqs = []
@@ -41,15 +46,30 @@ def read_iq_sweep_data(input_filename):
         data = pickle.load(f)
     return data['freqs'],data['z']
 
-def write_stream_data(output_filename,freqs,z,meta_data = None):
-    stream_dict = {"freqs":freqs,"z":z}
+def write_stream_data(output_filename,freqs,z,ttl_data = None,meta_data = None, downsampling = None): # Downsampling added by AnV on 01/19/2024
+    stream_dict = {"freqs":freqs,"z":z,"ttl":None,"downsampling":None}
+    if ttl_data is not None:
+        stream_dict['ttl'] = ttl_data
+    if downsampling is not None:
+        stream_dict['downsampling'] = downsampling;
     file_to_write = open(output_filename, "wb")
+    print(output_filename); 
     pickle.dump(stream_dict, file_to_write)
 
-def read_stream_data(input_filename):
+def read_stream_data(input_filename): # Downsampling option added by AnV on 01/19/2024
     with open(input_filename, 'rb') as f:
         data = pickle.load(f)
-    return data['freqs'],data['z']
+        # print(data['downsampling']); just a test
+    if 'downsampling' in data.keys():
+        if 'ttl' in data.keys():
+            return data['freqs'],data['z'],data['ttl'],data['downsampling']
+        return data['freqs'],data['z'],data['downsampling']
+    else:
+        if 'ttl' in data.keys():
+            return data['freqs'],data['z'],data['ttl']
+        else:
+            return data['freqs'],data['z']
+
 
 def write_filename_set(output_filename,filenames,value_list_1 = None):
     with open(output_filename,'w') as f:

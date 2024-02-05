@@ -1,20 +1,24 @@
+import importlib
 import matplotlib.pyplot as plt
 import numpy as np
 import qsghw.core.helpers as corehelpers
 import qsghw.fpgaip.helpers as fpgaiphelpers
 import qsghw.misc.windows as windows
-import qsghw.core.packetparser as packetparser
+#import qsghw.core.packetparser as packetparser
+import packetparser as packetparser
 import qsghw.core.interfaces as interfaces
 import time
-from submm.instruments import hp83732a as hp
-from submm.instruments import BNC845 as bnc
-from submm.instruments import anritsu_mg3691a as an
-from submm.instruments import weinchel8310 as weinchel
+#from submm.instruments import hp83732a as hp
+
+#from submm.instruments import BNC845 as bnc
+#from submm.instruments import anritsu_mg3691a as an
+#from submm.instruments import weinchel8310 as weinchel
 from submm.lab_brick import core as corelabbrick
 #from submm.instruments import cryocon22C as cc
 import resonator_class as res_class
 from submm.KIDs import find_resonances_interactive as find_res
 from submm.KIDs import calibrate as cal
+from submm.KIDs import analyze_multitone as am
 from submm.KIDs.res import fitting as res_fit
 from submm.KIDs.res import sweep_tools as tune_resonators
 import os
@@ -22,9 +26,12 @@ import data_io as data_io
 import glob
 from tqdm import tqdm
 from scipy import signal
+from scipy import interpolate
 yeses = ['yes','y']
 import sys
 import rfnco as rfnco
+from matplotlib.animation import FuncAnimation
+from scipy import signal # Added by AnV on 01/19/2024 for downsampling data before saving it 
 
 class readout(object):
 
@@ -47,7 +54,9 @@ class readout(object):
         To debug software without connecting to RFSOC set connect_rfsoc = False
         '''
         #self.ctrl = "tcp://192.168.0.128"
-        self.data_rate = 200000
+        #self.mode = 'normal'#'ttl'
+        self.mode = 'ttl'
+        self.data_rate = 250000 # Changed by AnV 02/05/2024
         self.ctrl = "udp://10.0.15.11" 
         self.window_type = "roach2"
         #self.window_type = "hft70-1024"
@@ -75,6 +84,7 @@ class readout(object):
         #self.lo = an.synthesizer()
         self.data = "udp://10.0.15.11"
         self.iq_sweep_data = None
+        self.iq_sweep_data_corr = None #IQ sweep data with cabel delay removed
         self.iq_sweep_data_old = None
         #self.input_attenuator = weinchel.attenuator('GPIB0::8::INSTR') #input to detectors, output of fpga
         #self.output_attenuator = None#weinchel.attenuator()
@@ -83,14 +93,17 @@ class readout(object):
         #self.BB = cc.temp_control()
         self.res_class = res_class.resonators_class([])
         self.vna_data = None
-        self.tau = 66*10**-9
+        self.tau = 4377*10**-9
         self.stream_data = None
-        self.data_dir = "/data/multitone_data/20230822_CCAT_led_map_array_1/"
+        self.ttl_data = None
+        #self.data_dir = "/data2/20231021_CCAT_array_2_optical_more_polcal_results/"
+        #self.data_dir = "/data2/20231130_CCAT_array_1_trimmed/"
+        self.data_dir = "/data2/20240125_CCAT_array_1_optical/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
-        self.vna_save_filename = "vna_sweep.csv"
+        self.vna_save_filename = "vna_sweep"
         self.iq_sweep_save_filename = "iq_sweep.p"
         self.stream_save_filename = "stream.p"
         self.res_class_save_filename = "resonators.csv"
@@ -100,6 +113,8 @@ class readout(object):
         self.normalizing_amplitudes = None
         self.pbar_ascii = True
 
+        self.folder_name = "" 
+        
         if connect_rfsoc:
             (self.ctrlif, self.dataif, self.eids) = corehelpers.open(self.ctrl, self.data, opendata=self.open_data,
                                                                  verbose=self.debug, quiet=self.quiet)
@@ -107,14 +122,15 @@ class readout(object):
 
             self.lo = rfnco.rfnco("rfrtconfa",self.ctrlif,self.dataif,self.eids)
             self.lo_freq = 896.0*10**6#814.00*10**6
-            self.lo.set_frequency(self.lo_freq)
+            #self.lo.set_frequency(self.lo_freq,fix_phase = False)
             # the other lo for doing sweeps
             self.fset = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":fullset:", 'fset0')
             self.tonegen = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":tonegen:", 'fset0')
             
             self.wfplayer = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":wfplayer:")
             #self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":chpfbfft:")
-            self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)  
+            self.frontend = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, interfaces.channelizer)
+            self.backend  = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, filt = 'backend')
             #self.circb = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":circbuffer:", "")
             #self.wfplayer.debug = self.frontend.debug = self.frontend.pfbfft.debug = self.frontend.binsel[self.group].debug \
             #    = self.frontend.fineddc[self.group].debug = self.circb.debug = (self.regaccess, self.debug, self.verbose)
@@ -185,6 +201,15 @@ class readout(object):
             print()
 
 
+    def create_folder(self, folder_name = ""): # Added by AnV
+        self.folder_name = folder_name; 
+        if not os.path.exists(self.data_dir + self.folder_name):
+            os.mkdir(self.data_dir + folder_name);
+            print("Measured data will be saved to a new folder: " + folder_name);
+        else:
+            print("Measured data will be saved to an existing folder: " + folder_name);
+            
+            
     def variables(self):
         print("readout object's variables")
         for key in self.__dict__.keys():
@@ -206,6 +231,7 @@ class readout(object):
             len(frequencies)
         except:
             frequencies = [frequencies]
+        self.frequencies = frequencies
         if np.isscalar(amplitude): # supplying array or of amplitudes?
             amplitude = np.ones(len(frequencies))*amplitude
         if random_phase:
@@ -214,11 +240,21 @@ class readout(object):
         else:
             phase = np.zeros(len(frequencies))
 
+        self.phase = phase
+
         n_tones = len(frequencies)
-        self.merge = 1001//n_tones #how many samples in a packet
+        if self.mode == 'ttl': # packets are twice as big
+            self.merge = 501//n_tones #how many samples in a packet
+        else:
+            self.merge = 1001//n_tones #how many samples in a packet   
         print("merge = "+str(self.merge))
 
+        #if self.mode == 'ttl':
+            #self.frontend.change_output('None')# this correct?
+            #self.backend.change_output('INPUT',self.merge,self.decimate) # maybe
+        #else:
         self.frontend.change_output(self.output, self.merge, self.decimate)
+        self.backend.change_output('None')
 
         self.real_freq_list = []
         self.wfplayer.del_tone(groupid = self.group)
@@ -232,6 +268,7 @@ class readout(object):
             maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
             scale_factor = (0.9*(2**16//2-1))/maximum_of_wave
             amplitude = amplitude*scale_factor
+            self.amplitude = amplitude
             self.real_freq_list = []
             self.wfplayer.del_tone(groupid = self.group)
             for i in range(0,len(frequencies)):
@@ -255,8 +292,21 @@ class readout(object):
 
         print()
 
+    def write_scaled_frequencies(self,scale):
+        amplitude = self.amplitude*scale
+        self.real_freq_list = []
+        self.wfplayer.del_tone(groupid = self.group)
+        for i in range(0,len(self.frequencies)):
+            self.wfplayer.set_tone(self.group,i,self.frequencies[i],self.phase[i],self.phase[i],amplitude[i],amplitude[i])
+            self.real_freq_list.append(self.wfplayer.get_tone(self.group,i)[0])
+        self.wfplayer.write_tone_list()
+        maximum_of_wave = np.max((np.abs(np.real(self.wfplayer.wave)),np.abs(np.imag(self.wfplayer.wave))))
+        print("max of wave = ",maximum_of_wave)
 
-    def iq_sweep(self,span = 100*10**3,npts = 101,average_time = 0.7,offset = 0.0,plot = True,leave = True,fit = False):
+        self.chanlist = self.frontend.set_chan_list(self.group, self.real_freq_list, write=True)
+        self.binnolist = [ self.frontend.get_chan(self.group, i)[1] for i in self.chanlist ]
+            
+    def iq_sweep(self,span = 100*10**3,npts = 101,average_time = 0.1,offset = 0.0,plot = True,leave = True,fit = False):
         if self.iq_sweep_data is not None:
             self.iq_sweep_data_old = self.iq_sweep_data
             self.iq_sweep_freqs_old = self.iq_sweep_freqs
@@ -281,12 +331,20 @@ class readout(object):
             #self.lo.get_frequency()
             alldata_array = self.get_data(to_read,verbose = False)
             for m in range(0,alldata_array.shape[1]):
-                self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
+                self.iq_sweep_data[n,m] = np.mean(alldata_array[:,m])   
+                #self.iq_sweep_data[n,m] = np.mean(signal.decimate(alldata_array[:,m],10))
+
 
         for m in range(0,len(self.real_freq_list)):                                                                                                             
             self.iq_sweep_freqs[:,m] = self.lo_freq + actual_iq_sweep_freqs+self.real_freq_list[m]  
+
+        if self.tau is not None:
+            self.iq_sweep_data_corr = np.zeros(self.iq_sweep_data.shape,dtype = 'complex')
+            for m in range(0,self.iq_sweep_data.shape[1]):
+                self.iq_sweep_data_corr[:,m] = cal.remove_cable_delay(self.iq_sweep_freqs[:,m],self.iq_sweep_data[:,m],self.tau)
         #self.lo.set_frequency(self.lo_freq)
-        self.fset.write_mixmode(0x00010001)
+        #self.fset.write_mixmode(0x00010001)
+        self.tonegen.set_i(freq = 0); self.tonegen.set_q(freq = 0);
         time.sleep(0.1)
         if fit:
             self.fit_iq_sweep()
@@ -296,7 +354,13 @@ class readout(object):
     def plot_iq_sweep(self,plot_two = False,retune = False):
         if self.iq_sweep_data is not None:
             if not plot_two:
-                ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data,retune = retune,
+                if self.iq_sweep_data_corr is not None:
+                    ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data_corr,retune = retune,
+                                                  combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
+                                                      combined_data_names = ["Resonator Frequencies (MHz)"],
+                                                     flags = self.current_flags())
+                else:
+                    ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data,retune = retune,
                                                   combined_data = self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,:]/10**6,
                                                       combined_data_names = ["Resonator Frequencies (MHz)"],
                                                      flags = self.current_flags())
@@ -340,7 +404,7 @@ class readout(object):
             self.write_resonator_tones()
 
 
-    def vna_sweep(self,start,stop,resolution = 1*10**3,average_time = 0.1,min_tone_spacing = 0.2*10**6, plot=True, set_freqs=True):
+    def vna_sweep(self,start,stop,resolution = 1*10**3,average_time = 0.01,min_tone_spacing = 2.5*10**6, plot=True, set_freqs=True):
         '''
         Pretend we are vna for finding resonances
         currently limited to putting tone ~10MHz apart
@@ -388,7 +452,7 @@ class readout(object):
             for m in range(0,alldata_array.shape[1]):
                 iq_sweep_data[n,m] = np.mean(alldata_array[:,m])
 
-        self.fset.write_mixmode(0x00010001)
+        #self.fset.write_mixmode(0x00010001)
                 
         for m in range(0,len(self.real_freq_list)):                                                                                                            
             self.vna_freqs = np.append(self.vna_freqs,self.lo_freq+self.real_freq_list[m]+actual_iq_sweep_freqs)
@@ -406,8 +470,11 @@ class readout(object):
         #self.lo.set_frequency(self.lo_freq) #make sure LO is back at nominal frequency
         time.sleep(0.1)
         stream_len = int(1024*8*stream_time*self.data_rate/self.merge)//(1024*8)*1024*8
-        self.stream_data = self.get_data(stream_len,verbose = False)
         self.stream_frequencies = [freq + self.lo_freq for freq in self.real_freq_list]
+        if self.mode == 'ttl':
+            self.stream_data, self.ttl_data  = self.get_data(stream_len,verbose = False,ttl = True)
+        else:
+            self.stream_data = self.get_data(stream_len,verbose = False)
 
 
     def plot_iq_and_stream(self,decimate = 1000):#eventualy decimate -> frequency
@@ -415,11 +482,13 @@ class readout(object):
         if self.stream_data is not None:
             if self.iq_sweep_data is not None:
                 self.decimated_stream_data = self.stream_data #need deep copy?
-                factors_of_10 = int(np.floor(np.log10(decimate)))
-                for k in range(0,factors_of_10):
-                    self.decimated_stream_data = signal.decimate(self.decimated_stream_data,10,axis = 0)
-                self.decimated_stream_data = signal.decimate(self.decimated_stream_data,
-                                                             decimate//(10**factors_of_10),axis =0)
+                #factors_of_10 = int(np.floor(np.log10(decimate)))
+                #for k in range(0,factors_of_10):
+                #    self.decimated_stream_data = signal.decimate(self.decimated_stream_data,10,axis = 0)
+                #self.decimated_stream_data = signal.decimate(self.decimated_stream_data,
+                #                                             decimate//(10**factors_of_10),axis =0)
+                #decimate seems to bias the mean
+                self.decimated_stream_data = signal.resample_poly(self.decimated_stream_data,1,decimate,padtype = 'mean')
 
                 ip = tune_resonators.InteractivePlot(self.iq_sweep_freqs,self.iq_sweep_data,
                                                       stream_data = self.decimated_stream_data,
@@ -439,14 +508,14 @@ class readout(object):
         plt.title("VNA Sweep")
         plt.show()
 
-    def save_vna_data(self):
+    def save_vna_data(self,save_as_pickle = False):
         timestr = time.strftime("%Y%m%d_%H%M%S")
         save_filename = self.data_dir+"/"+timestr+"_"+self.vna_save_filename
-        data_io.write_vna_data(save_filename,self.vna_freqs,self.vna_data)
+        data_io.write_vna_data(save_filename,self.vna_freqs,self.vna_data,save_as_pickle = save_as_pickle)
 
     def load_vna_data(self,filename = None):
         if not filename: # look for most recent file
-            list_of_files = glob.glob(self.data_dir+'/*'+self.vna_save_filename)
+            list_of_files = glob.glob(self.data_dir+'/*'+self.vna_save_filename+'*')
             latest_file = max(list_of_files, key=os.path.getctime)
             self.vna_freqs,self.vna_data = data_io.read_vna_data(latest_file)
         else:
@@ -460,9 +529,9 @@ class readout(object):
                     print("error with file "+filename)
 
     def save_iq_data(self,filename_suffix = ""):
-        timestr = time.strftime("%Y%m%d_%H%M%S")
-        save_filename = self.data_dir+"/"+timestr+"_"+self.iq_sweep_save_filename.split(".")[0]+\
-            filename_suffix+"."+self.iq_sweep_save_filename.split(".")[1]
+        timestr = time.strftime("%Y%m%d_%H%M%S") 
+        save_filename = self.data_dir + "/" + self.folder_name + "/" +timestr+"_"+self.iq_sweep_save_filename.split(".")[0]+\
+            filename_suffix+"."+self.iq_sweep_save_filename.split(".")[1] # Anna
         data_io.write_iq_sweep_data(save_filename,self.iq_sweep_freqs,self.iq_sweep_data)
         return save_filename
 
@@ -484,10 +553,18 @@ class readout(object):
                 else:
                     print("error with file "+filename)
 
-    def save_stream_data(self):
-        timestr = time.strftime("%Y%m%d_%H%M%S")
-        save_filename = self.data_dir+"/"+timestr+"_"+self.stream_save_filename
-        data_io.write_stream_data(save_filename,self.stream_frequencies,self.stream_data)
+    def save_stream_data(self,filename_suffix = "", folder_name = "Test", downsampling = 250):
+        # Added a new downsampling parameter downsampling  = 250 (default -> 1 kHz sampling rate), by AnV 01/19/2024 
+        timestr = time.strftime("%Y%m%d_%H%M%S");
+        save_filename = self.data_dir + "/" + self.folder_name + "/" + timestr+"_"+self.stream_save_filename.split(".")[0]+\
+            filename_suffix+"."+self.stream_save_filename.split(".")[1]
+        stream_data_downsampled = signal.resample_poly(self.stream_data, 1, downsampling, padtype = 'mean'); 
+        if self.mode == 'ttl':
+            ttl_data_downsampled = signal.resample_poly(self.ttl_data.astype('float'), 1, downsampling, padtype = 'mean');
+            data_io.write_stream_data(save_filename,self.stream_frequencies,stream_data_downsampled,ttl_data = ttl_data_downsampled, downsampling = downsampling);
+            # Downsampling also added to data_io.write ... function by AnV on 01/19/2024
+        else:
+            data_io.write_stream_data(save_filename,self.stream_frequencies,stream_data_downsampled, downsampling = downsampling);
         return save_filename
 
     def load_stream_data(self,filename = None):
@@ -497,7 +574,10 @@ class readout(object):
             self.stream_freqs,self.stream_data = data_io.read_stream_data(latest_file)
         else:
             try:
-                self.stream_frequencies,self.stream_data = data_io.read_stream_data(filename)
+                if self.mode == 'ttl':
+                    self.stream_frequencies,self.stream_data,self.ttl_data = data_io.read_stream_data(filename)
+                else:
+                    self.stream_frequencies,self.stream_data = data_io.read_stream_data(filename)
             except:
                 print("could not read file: "+filename)
                 if not os.path.exists(filename):
@@ -527,6 +607,7 @@ class readout(object):
     def load_res_class(self,filename = None):
         if not filename:
             list_of_files = glob.glob(self.data_dir+'/*'+self.res_class_save_filename)
+            print(list_of_files) # AnV
             latest_file = max(list_of_files, key=os.path.getctime)
             self.res_class = data_io.read_resonators_class(latest_file)
         else:
@@ -541,22 +622,71 @@ class readout(object):
         
             
 
-    def get_data(self,to_read,verbose= True):
+    def get_data(self,to_read,verbose= True,ttl = False): # Was earlier ttl = False, AnV 01/26/2024
         self.dataif.reset()
         (nbytes,raw_data) = self.dataif.readall(to_read)
         #print(nbytes)
         if verbose:
             print("raw data",sys.getsizeof(raw_data))
+        
+        #(headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
+        #    packetparser.findlongestcontinuous(raw_data, incr=512)
+
+        
         (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
-            packetparser.findlongestcontinuous(raw_data, incr=512)
+            packetparser.findlongestcontinuous(raw_data, incr=512, srcid = 142999584) # Added by AnV 02/01/2024  srcid=144703552
+
+        
         if verbose:
             print(sys.getsizeof(headeroffsets),sys.getsizeof(payloadoffsets),sys.getsizeof(payloadlengths),sys.getsizeof(seqnos))
         (consumed, alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
         if verbose:
             print(sys.getsizeof(consumed),sys.getsizeof(alldata))
-        #print(alldata)
+        print(alldata)
+        readout.alldata = alldata
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
         alldata_array = alldata.data['i']+1j*alldata.data['q']
+        if ttl:
+            
+            (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
+                packetparser.findlongestcontinuous(raw_data, incr=512, srcid = 101187616) # Added by AnV 02/01/2024
+            
+            if verbose:
+                print(sys.getsizeof(headeroffsets),sys.getsizeof(payloadoffsets),sys.getsizeof(payloadlengths),sys.getsizeof(seqnos))
+            (ttlconsumed, ttldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
+            
+            ttl_value_list = [];
+            ttl_time_list = []; 
+            for i in range(0, ttldata.data.shape[0]):
+                if ttldata.data[i]['active'] == 2147483648:
+                    try:
+                        ttl_value_list.append(float(bin(ttldata.data[i]['value'][0])[33]))
+                        ttl_time_list.append(float(ttldata.data[i]['t'][0]))
+                    except:
+                        #print("Could not find ttl edges."); 
+                        pass
+                       
+            if verbose:
+                print(sys.getsizeof(consumed),sys.getsizeof(alldata)) 
+
+            print("ttl time length= " + str(len(ttl_time_list)))
+            print("ttl value length = " + str(len(ttl_value_list)))
+            print("alldata array length = " + str(len(alldata_array.data)))
+                        
+            #print(ttldata)
+            
+            #ttl_array = ttldata#alldata.data['sync0'] # maybe syncbux
+            ttl_value = np.asarray(ttl_value_list)
+            ttl_time = np.asarray(ttl_time_list)
+            #pass
+
+            ttl_interp = interpolate.interp1d(ttl_time, ttl_value, kind='previous');
+            ttl_array = ttl_interp(np.linspace(ttl_time[0], ttl_time[-1], len(alldata_array.data)));
+
+            self.alldata_array = alldata_array
+            self.ttl_array = ttl_array
+            
+            return alldata_array, ttl_array
         if verbose:
             print(sys.getsizeof(alldata_array))
         return alldata_array
@@ -565,7 +695,6 @@ class readout(object):
     def close(self):
         self.dataif.close()
         self.ctrlif.close()
-
 
     def get_ADC_wave(self):
         # frontend output selection                                                                                             
@@ -673,7 +802,7 @@ class readout(object):
                 print(resonator.frequency,"Turning resonator on")
    
                     
-    def take_noise_set(self,fine_span = 100e3,stream_time= 60,average_time = 0.1,plot = True,retune = True):
+    def take_noise_set(self,fine_span = 100e3,stream_time= 60,average_time = 0.1,plot = True,retune = True,filename_suffix = "",downsampling=250):
         filenames = []
         if retune:
             print("Taking tuning iq sweep")
@@ -684,18 +813,18 @@ class readout(object):
         #filenames.append(self.save_iq_data())
         print("taking iq sweep")
         self.iq_sweep(fine_span,average_time = average_time,plot = False)
-        filenames.append(self.save_iq_data())
+        filenames.append(self.save_iq_data(filename_suffix = filename_suffix))
         print("taking streaming data")
         self.get_stream_data(stream_time)
-        filenames.append(self.save_stream_data())
-        self.save_noise_set_filenames(filenames)
+        filenames.append(self.save_stream_data(filename_suffix = filename_suffix,folder_name = "Test", downsampling = downsampling)) # Changed by AnV 01/26/2024
+        self.save_noise_set_filenames(filenames,filename_suffix = filename_suffix)
         if plot:
             self.plot_iq_and_stream()
         
 
-    def save_noise_set_filenames(self,filenames):
+    def save_noise_set_filenames(self,filenames,filename_suffix): # AnV
         timestr = time.strftime("%Y%m%d_%H%M%S")
-        save_filename = self.data_dir+"/"+timestr+"_noise_set_filenames.txt"
+        save_filename = self.data_dir + "/" + self.folder_name +"/"+timestr+"_noise_set_filenames"+filename_suffix+".txt"
         data_io.write_filename_set(save_filename,filenames)
         
 
@@ -759,7 +888,63 @@ class readout(object):
         self.input_attenuator.set_attenuation(initial_input_attenuation)
         if self.output_attenuator is not None:
             self.output_attenuator.set_attenuation(initial_output_attenuation)
-        
+
+
+    def dac_power_sweep(self,max_attenuation,min_attenuation,attenuation_step,span=100*10**3,npts = 101,
+                         average_time = 0.1,output_attenuation = None,plot = False,pause_between_powers =1 ):
+        '''                           
+        same as power sweep but we are not going to use the output attenuator instead we are just going 
+        to change the power by scaling the daq wave form
+        do iq sweeps at different power levels to find bifurcation power levels                             
+        halfway between max and min attenuation                                           
+        '''
+        n_attn_levels = np.int((max_attenuation-min_attenuation)/attenuation_step)+1
+        attn_levels = np.linspace(max_attenuation,min_attenuation,n_attn_levels)
+        voltage_scale = 10**(-attn_levels/20)
+        n_res = len(self.chanlist)
+        self.power_sweep_iq_data = np.zeros((npts,n_res,n_attn_levels),dtype = 'complex')
+        self.power_sweep_iq_freqs = np.zeros((npts,n_res,n_attn_levels))
+        if output_attenuation is not None:
+            if self.output_attenuator is not None:
+                attn_levels_output = attn_levels[::-1]-(attn_levels[len(attn_levels)//2]-output_attenuation)
+            else:
+                print("No output attenuator connected do not specify output_attenuation")
+                return
+        else:
+            if self.output_attenuator is not None: # best guess                                                                         
+                output_attenuation = self.output_attenuator.get_attenuation()
+                attn_levels_output = attn_levels[::-1]-(attn_levels[len(attn_levels)//2]-output_attenuation)
+        if self.output_attenuator is not None:
+            index_lt_zero = np.where(attn_levels_output<0)
+            attn_levels_output[index_lt_zero] = 0
+
+        filenames = []
+        pbar = tqdm(range(0,n_attn_levels),ascii = self.pbar_ascii)
+        initial_input_attenuation = 0#self.input_attenuator.get_attenuation()
+        if self.output_attenuator is not None:
+            initial_output_attenuation = self.output_attenuator.get_attenuation()
+        self.write_resonator_tones()
+        for k in pbar:
+            self.write_scaled_frequencies(scale = voltage_scale[k])
+            #self.input_attenuator.set_attenuation(attn_levels[k])
+            input_attenuation = self.input_attenuator.get_attenuation()
+            if self.output_attenuator is not None:
+                self.output_attenuator.set_attenuation(attn_levels_output[k])
+                output_attenuation = self.output_attenuator.get_attenuation()
+                pbar.set_description("Input Attenuation = "+str(attn_levels[k])+" Output_attenaution = " +\
+                      str(output_attenuation))
+            else:
+                pbar.set_description("Input Attenuation = "+str(attn_levels[k]))
+            time.sleep(pause_between_powers)
+            self.iq_sweep(span,npts,average_time,plot = False,leave = False)
+            self.power_sweep_iq_data[:,:,k] = self.iq_sweep_data
+            self.power_sweep_iq_freqs[:,:,k] = self.iq_sweep_freqs
+            filenames.append(self.save_iq_data())
+        self.attn_levels = attn_levels
+        self.save_power_sweep_filenames(filenames,attn_levels)
+        self.input_attenuator.set_attenuation(initial_input_attenuation)
+        if self.output_attenuator is not None:
+            self.output_attenuator.set_attenuation(initial_output_attenuation)            
         
     def save_power_sweep_filenames(self,filenames,attn_levels):
         timestr = time.strftime("%Y%m%d_%H%M%S")
@@ -871,12 +1056,12 @@ class readout(object):
             return None
 
     def update_flags(self,flags):
-        if self.res_class is not None:
+        if self.res_class is not None and len(flags) > 0:
             for i, resonator in enumerate(self.res_class.resonators):
                 if resonator.use:
                     resonator.flags = flags[i]
         else:
-            print("no resonator class found")
+            print("no resonator class found or no flags found")
 
             
     def quick_power_tune(self,range_limit =10):
@@ -893,3 +1078,112 @@ class readout(object):
         index_high = np.where(pow_factor>median_pow_factor*np.sqrt(range_limit))
         pow_factor[index_high] = median_pow_factor*range_limit
         self.normalizing_amplitudes = self.normalizing_amplitudes*np.sqrt(pow_factor)
+
+    def monitor(self,span = 100e3,average_time = 0.1):
+        '''
+        A function for monitoring the signal in real time
+        probably should make put this in a seperate file as it own class
+        '''
+        self.iq_sweep(span = span,plot = False)
+        self.cal_dict = am.calibrate_multi(self.iq_sweep_freqs,self.iq_sweep_data,tau = self.tau,plot = False)
+
+        self.monitor_fig = plt.figure(figsize = (12,8))
+        self.monitor_ax_iq = self.monitor_fig.add_subplot(221)
+        self.monitor_ax_iq.set_aspect('equal')
+        self.monitor_ax_df_over_f = self.monitor_fig.add_subplot(222)
+        self.monitor_ax_all_df_over_f = self.monitor_fig.add_subplot(212)
+        
+        self.curr_m = 0
+        def on_key_press(event):
+            if event.key == 'left':
+                if self.curr_m != 0:
+                    self.curr_m = self.curr_m -1
+                else:
+                    self.curr_m = int(self.iq_sweep_freqs.shape[1]-1)
+            if event.key == 'right':
+                if self.curr_m != int(self.iq_sweep_freqs.shape[1]-1):
+                    self.curr_m = self.curr_m +1
+                else:
+                    self.curr_m = 0
+        self.monitor_fig.canvas.mpl_connect('key_press_event', on_key_press)
+        x_data = []
+        y_data = []
+        self.monitor_df_over_f, = self.monitor_ax_df_over_f.plot(x_data, y_data, '-')
+        self.monitor_iq_sweep, = self.monitor_ax_iq.plot(np.real(self.cal_dict['fine_corr'][:,0]),
+                                                         np.imag(self.cal_dict['fine_corr'][:,0]),'-o')
+        #self.interval = interval
+        self.monitor_ax_df_over_f.set_title('df/f Resonator 0')
+        self.monitor_ax_df_over_f.set_xlabel('time (s)')
+        self.monitor_ax_df_over_f.set_ylabel('df/f')
+
+        self.monitor_ax_all_df_over_f.set_xlabel('Resonator index')
+        self.monitor_ax_all_df_over_f.set_ylabel('df/f')
+        
+
+        stream_len = int(1024*8*average_time*self.data_rate/self.merge)//(1024*8)*1024*8
+        alldata_array = self.get_data(stream_len,verbose = False)
+        self.then = time.time()
+        self.times = np.zeros(1)
+        self.iq_data_w_time = np.zeros(alldata_array.shape[1])
+        self.iq_df_over_f_w_time = np.zeros(alldata_array.shape[1])
+        self.all_z_corr = np.zeros(alldata_array.shape[1],dtype = 'complex')
+        for m in range(0,alldata_array.shape[1]):
+            z = np.mean(alldata_array[:,m])
+            z_corr = cal.remove_cable_delay(self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,m],z,self.tau)
+            z_corr = z_corr - self.cal_dict['circle_fit'][m,0] -1j*self.cal_dict['circle_fit'][m,1]
+            z_corr = z_corr*np.exp(-1j*self.cal_dict['circle_fit'][m,-1])
+            self.all_z_corr[m] = z_corr
+            self.iq_data_w_time[m] = self.cal_dict['interp_functions'][m](np.arctan2(np.real(z_corr),np.imag(z_corr)))
+        #y_data.append(self.iq_data_w_time[curr_m])
+        self.monitor_iq_point, = self.monitor_ax_iq.plot(np.real(self.all_z_corr[0]),np.imag(self.all_z_corr[0]),"*")
+        self.monitor_all_df_over_f, = self.monitor_ax_all_df_over_f.plot(np.arange(0,len(self.iq_df_over_f_w_time)),
+                                                                         self.iq_df_over_f_w_time,"o")
+        self.monitor_all_df_over_f_highlight, = self.monitor_ax_all_df_over_f.plot(0,self.iq_df_over_f_w_time[0],'o')
+        
+        def update(frame):
+            self.times = np.append(self.times,time.time()-self.then)
+            alldata_array = self.get_data(stream_len,verbose = False)
+            iq_data_w_time_temp = np.zeros(alldata_array.shape[1])
+            for m in range(0,alldata_array.shape[1]):
+                z =	np.mean(alldata_array[:,m])
+                z_corr = cal.remove_cable_delay(self.iq_sweep_freqs[self.iq_sweep_freqs.shape[0]//2,m],z,self.tau)
+                z_corr = z_corr - self.cal_dict['circle_fit'][m,0] -1j*self.cal_dict['circle_fit'][m,1]
+                z_corr = z_corr*np.exp(-1j*self.cal_dict['circle_fit'][m,-1])
+                self.all_z_corr[m] = z_corr
+                iq_data_w_time_temp[m] = self.cal_dict['interp_functions'][m](np.arctan2(np.real(z_corr),np.imag(z_corr)))
+
+            self.iq_data_w_time = np.vstack((self.iq_data_w_time,iq_data_w_time_temp))
+            self.iq_df_over_f_w_time = (self.iq_data_w_time-self.iq_data_w_time[0,:])/self.iq_data_w_time[0,:]
+
+                                 
+            self.monitor_df_over_f.set_data(self.times,self.iq_df_over_f_w_time[:,self.curr_m] )
+
+            # all df over f plot
+            self.monitor_all_df_over_f.set_data(np.arange(0,self.iq_df_over_f_w_time.shape[1]),
+                                                self.iq_df_over_f_w_time[-1,:])
+            self.monitor_all_df_over_f_highlight.set_data(self.curr_m,self.iq_df_over_f_w_time[-1,self.curr_m])
+
+            # iq circle plot
+            self.monitor_iq_sweep.set_data(np.real(self.cal_dict['fine_corr'][:,self.curr_m]),
+                                           np.imag(self.cal_dict['fine_corr'][:,self.curr_m]))
+            self.monitor_iq_point.set_data(np.real(self.all_z_corr[self.curr_m]),np.imag(self.all_z_corr[self.curr_m]))
+            
+            self.monitor_ax_df_over_f.relim()
+            self.monitor_ax_df_over_f.autoscale_view()
+
+            self.monitor_ax_all_df_over_f.set_ylim(np.min(self.iq_df_over_f_w_time),np.max(self.iq_df_over_f_w_time))
+            #self.monitor_ax_all_df_over_f.autoscale_view()
+
+            self.monitor_ax_iq.relim()
+            self.monitor_ax_iq.autoscale_view()
+            #plt.plot(x_data, y_data, '-', color='blue')
+            self.monitor_ax_df_over_f.set_title('df/f Resonator '+str(self.curr_m))
+            return self.monitor_df_over_f,
+        self.monitor_iq_sweep,
+        self.monitor_iq_point,
+        self.monitor_all_df_over_f,
+        self.monitor_all_df_over_f_highlight
+
+ 
+        animation = FuncAnimation(self.monitor_fig, update)
+        plt.show()
