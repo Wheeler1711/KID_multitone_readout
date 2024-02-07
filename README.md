@@ -27,7 +27,7 @@ readout.input_attenuator.set_attenuation(10)
 readout.iq_sweep()
 readout.retune_resonators(find_min = True)
 readout.iq_sweep()
-readout.power_sweep(20,0,2,span = 200e3,npts = 201)
+readout.power_sweep(20,0,2,span = 200e3,npts = 201) # This does not work if input attenuator is not used 
 readout.dac_power_sweep(20, 0, 2) # Directly scaling the FPGA generated waveform
 readout.fit_power_sweep()
 readout.tune_powers()
@@ -177,6 +177,8 @@ pset 5 1
 pset 6 1
 pset 17 1                              # etc.
 logout
+
+
 
 ```
 # Remote view of Linux using RealVNC Viewer (Windows Powershell)
