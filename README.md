@@ -128,9 +128,9 @@ The alignment of the source is very important! Please set home_xy =True to make 
 from detchar import polcal_mkid as polcal
 xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
 grid_angle = 0; # Set the polarization angle (deg)
-polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_perids = 50, wait_s = 3) # Default wait_s = 0.1 seconds which is too fast
+polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_periods = 50, wait_s = 1) # Default wait_s = 0.1 seconds
 # Do not change this directory name afterwards, calibration routine may break 
-polcal_sweeper.acquire(downsampling=250) # Downsampling isa new feature
+polcal_sweeper.acquire(downsampling=250) # Downsampling is a new feature
 ```
 If you want to move the xy-stage in absolute coordinates (mm) referenced to "home" (0, 0)
 ```
