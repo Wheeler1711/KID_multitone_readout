@@ -28,7 +28,7 @@ readout.iq_sweep()
 readout.retune_resonators(find_min = True)
 readout.iq_sweep()
 readout.power_sweep(20,0,2,span = 200e3,npts = 201) # This does not work if input attenuator is not used 
-readout.dac_power_sweep(20, 0, 2) # Directly scaling the FPGA generated waveform
+readout.dac_power_sweep(20, 0, 2) # Directly scaling the FPGA generated waveform # Use this, input and output powers should match to obtain the best S21
 readout.fit_power_sweep()
 readout.tune_powers()
 ```
