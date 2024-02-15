@@ -152,7 +152,7 @@ pktsrcsel.py udp://10.0.15.11 timestamp=ENABLED                    # Enables tim
 eidtest.py --ctrl=udp://10.0.15.11 -d | grep -e riseen -e fallen   # Gives the IDs for fallng and rising edge trigger signals
 # fallen = 2147483648
 # riseen = 3221225472
-regrw.py udp:// 0x06000038=0xffffffff 0x0600003c=0xffffffff
+regrw.py udp://10.0.15.11 0x06000038=0xffffffff 0x0600003c=0xffffffff
 ```
 
 # Reset rfsoc in linux (for example after power outage) 
