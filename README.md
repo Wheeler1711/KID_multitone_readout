@@ -179,7 +179,8 @@ pset 5 1                               # Set one port to 1 or 0
 pset 6 1
 pset 17 1                              # etc.
 logout
-
+# More commands can be found in: 
+# https://static1.squarespace.com/static/54d27fb4e4b024eccdd9e569/t/6259cbade66b71218d8284ed/1650052014555/1094_NPStartup_V14.pdf
 
 
 ```
