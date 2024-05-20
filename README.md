@@ -174,7 +174,8 @@ ifconfig eno2:1 192.168.30.21/24 up    # Connect XY stage via Ethernet
 ping 192.168.30.100                    # Check connection
 
 busybox telnet 192.168.0.231           # Remote connect to power connectors
-pset 5 1
+ps 1                                   # Set all ports to 1 or 0 (ON or OFF)
+pset 5 1                               # Set one port to 1 or 0
 pset 6 1
 pset 17 1                              # etc.
 logout
