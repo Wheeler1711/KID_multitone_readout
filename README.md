@@ -122,6 +122,11 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 # Do not change this directory name afterwards, calibration routine may break 
 ```
 
+If you want to only move the polarizer, for example 30 degrees
+```
+polcal_sweeper.grid_motor_motor.move_absolute(30, wait = True) 
+```
+
 # Polcal - rotation and XY mapping 
 The alignment of the source is very important! Please set home_xy =True to make sure you don't loose the coordinates. 
 ```
