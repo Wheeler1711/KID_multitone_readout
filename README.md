@@ -232,7 +232,7 @@ rm -vi /tmp/folder_name.zip
 # Lists entries to the disks 
 sudo fdisk -l
 # Be sure you found the correct path to the correct hard drive, then:
-sudo mount -t ntfs /dev/sdc1 /media/
+sudo mount -t ntfs /dev/sdc1 /media/mybook25ED
 ```
 
 # Useful general commands 
