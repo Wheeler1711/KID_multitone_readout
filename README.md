@@ -227,6 +227,14 @@ df -h /tmp/
 rm -vi /tmp/folder_name.zip 
 ```
 
+# Mount external hard drive
+```
+# Lists entries to the disks 
+sudo fdisk -l
+# Be sure you found the correct path to the correct hard drive, then:
+sudo mount -t ntfs /dev/sdc1 /media/
+```
+
 # Useful general commands 
 ```
 lsusb                        # lists all USB devices 
