@@ -124,7 +124,7 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 
 If you want to only move the polarizer, for example 30 degrees
 ```
-polcal_sweeper.grid_motor_motor.move_absolute(30, wait = True) 
+polcal_sweeper.grid_motor.move_absolute(30, wait = True) 
 ```
 
 # Polcal - rotation and XY mapping 
@@ -229,6 +229,7 @@ rm -vi /tmp/folder_name.zip
 
 # Useful general commands 
 ```
+lsusb                        # lists all USB devices 
 df -T                        # shows available and used memory, FPGA output 250 kS/s, so space can run out
 nmcli device show            # lists all devices connected
 df /                         # returns the recycling bin location, in our case ~./dev/nvme0n1p2
