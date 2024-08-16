@@ -233,7 +233,7 @@ df -h           # Lists mounted devices
 sudo fdisk -l   # Lists entries to the disks 
 
 # Be sure you found the correct path to the correct hard drive, then:
-sudo mount -t ntfs /dev/sdc1 /media/mybook25ED
+sudo mount /dev/sdc1 /media/mybook25ED
 df -h          # Lists mounted devices
 ```
 
