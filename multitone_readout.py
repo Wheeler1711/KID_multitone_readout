@@ -4,8 +4,8 @@ import numpy as np
 import qsghw.core.helpers as corehelpers
 import qsghw.fpgaip.helpers as fpgaiphelpers
 import qsghw.misc.windows as windows
-#import qsghw.core.packetparser as packetparser
-import packetparser as packetparser
+import qsghw.core.packetparser as packetparser
+#import packetparser as packetparser # This is for begugging only! 
 import qsghw.core.interfaces as interfaces
 import time
 #from submm.instruments import hp83732a as hp
@@ -54,8 +54,8 @@ class readout(object):
         To debug software without connecting to RFSOC set connect_rfsoc = False
         '''
         #self.ctrl = "tcp://192.168.0.128"
-        #self.mode = 'normal'#'ttl'
-        self.mode = 'ttl'
+        self.mode = 'average'#'ttl'
+        #self.mode = 'ttl'
         self.data_rate = 250000 # Changed by AnV 02/05/2024
         self.ctrl = "udp://10.0.15.11" 
         self.window_type = "roach2"
@@ -96,9 +96,16 @@ class readout(object):
         self.tau = 4377*10**-9
         self.stream_data = None
         self.ttl_data = None
+        self.average_data= None
         #self.data_dir = "/data2/20231021_CCAT_array_2_optical_more_polcal_results/"
         #self.data_dir = "/data2/20231130_CCAT_array_1_trimmed/"
-        self.data_dir = "/data2/20240125_CCAT_array_1_optical/"
+        #self.data_dir = "/data2/20240125_CCAT_array_1_optical/"
+        #self.data_dir = "/data2/20240228_NbTiN_blackbody_and_Al_MKIDs/measurements_at_250mK/"
+        self.data_dir = "/data/multitone_data/20250212_CCAT_led_map_280GHz_remake/"
+        #self.data_dir = "/data2/20240521_Toltec_chip_polcal/"
+        #self.data_dir = "/data2/20240815_EoRSpec_260GHz_array_1_LED_mapping/"
+        #self.data_dir = "/data2/20241011_trimmed_CCAT_TiN_array_FTS/"
+        #self.data_dir = "/data2/20240604_NbTiN_blackbody_at_10K/"
         self.data_dir = os.path.expanduser(self.data_dir)
         print(self.data_dir)
         if not os.path.exists(self.data_dir):
@@ -121,7 +128,7 @@ class readout(object):
             self.ctrlif.debug = [self.insane, self.show_access]
 
             self.lo = rfnco.rfnco("rfrtconfa",self.ctrlif,self.dataif,self.eids)
-            self.lo_freq = 896.0*10**6#814.00*10**6
+            self.lo_freq = 896.0*10**6/2#814.00*10**6
             #self.lo.set_frequency(self.lo_freq,fix_phase = False)
             # the other lo for doing sweeps
             self.fset = fpgaiphelpers.makeinstance(self.ctrlif, self.eids, ":fullset:", 'fset0')
@@ -392,7 +399,10 @@ class readout(object):
         #        pass 
         #    else:
         #        return
-        new_frequencies = tune_resonators.tune_kids(self.iq_sweep_freqs,self.iq_sweep_data,find_min = find_min)
+        if self.iq_sweep_data_corr is not None:
+            new_frequencies = tune_resonators.tune_kids(self.iq_sweep_freqs,self.iq_sweep_data_corr,find_min = find_min)
+        else:
+            new_frequencies = tune_resonators.tune_kids(self.iq_sweep_freqs,self.iq_sweep_data,find_min = find_min)
         if self.res_class.len_use_true() == self.iq_sweep_data.shape[1]:
             # change freqeuncies in resonator class
             new_frequencies_index = 0
@@ -430,7 +440,8 @@ class readout(object):
         #    self.vna_freqs = np.append(self.vna_freqs,self.real_freq_list[m]+iq_sweep_freqs)
 
         # 1 packet is 8k = 1024*8 each pa
-        to_read = int(1024*8*average_time*self.data_rate/self.merge)//(1024*8)*1024*8 # at some point should turn this into an integration time
+        to_read = int(1024*8*average_time*self.data_rate/self.merge)//(1024*8)*1024*8 
+        # at some point should turn this into an integration time
         print(to_read)
         iq_sweep_data = np.zeros((len(iq_sweep_freqs),len(self.real_freq_list)),dtype ='complex')
 
@@ -473,6 +484,8 @@ class readout(object):
         self.stream_frequencies = [freq + self.lo_freq for freq in self.real_freq_list]
         if self.mode == 'ttl':
             self.stream_data, self.ttl_data  = self.get_data(stream_len,verbose = False,ttl = True)
+        elif self.mode == 'average':
+            self.stream_data, self.average_data = self.get_data(stream_len,verbose = False,average = True)
         else:
             self.stream_data = self.get_data(stream_len,verbose = False)
 
@@ -504,7 +517,7 @@ class readout(object):
         plt.figure(1)
         plt.plot(self.vna_freqs/10**6,20*np.log10(np.abs(self.vna_data)))
         plt.xlabel("Frequency (MHz)")
-        plt.ylabel("Power dB")
+        plt.ylabel("Power (dB)")
         plt.title("VNA Sweep")
         plt.show()
 
@@ -560,7 +573,7 @@ class readout(object):
             filename_suffix+"."+self.stream_save_filename.split(".")[1]
         stream_data_downsampled = signal.resample_poly(self.stream_data, 1, downsampling, padtype = 'mean'); 
         if self.mode == 'ttl':
-            ttl_data_downsampled = signal.resample_poly(self.ttl_data.astype('float'), 1, downsampling, padtype = 'mean');
+            ttl_data_downsampled = np.round(signal.resample_poly(self.ttl_data.astype('float'), 1, downsampling, padtype = 'constant'));
             data_io.write_stream_data(save_filename,self.stream_frequencies,stream_data_downsampled,ttl_data = ttl_data_downsampled, downsampling = downsampling);
             # Downsampling also added to data_io.write ... function by AnV on 01/19/2024
         else:
@@ -594,7 +607,13 @@ class readout(object):
                                                                          use = True))
                     self.res_class.resonators[m].flags = ip.flags[m]
             else:
-                print("please write code to handle retunning from vna")
+                print("Code to handle retunning from vna")
+                self.res_class = resonator_class.resonators_class([]);
+                ip = find_res.find_vna_sweep(self.vna_freqs,self.vna_data)
+                for m in range(len(ip.kid_idx)):
+                    self.res_class.resonators.append(res_class.resonator(ip.chan_freqs[ip.kid_idx[m]],
+                                                                         use = True))
+                    self.res_class.resonators[m].flags = ip.flags[m]
                         
         else:
             print("No VNA data found")
@@ -622,19 +641,17 @@ class readout(object):
         
             
 
-    def get_data(self,to_read,verbose= True,ttl = False): # Was earlier ttl = False, AnV 01/26/2024
+    def get_data(self,to_read,verbose= True,ttl = False,average = False): 
         self.dataif.reset()
         (nbytes,raw_data) = self.dataif.readall(to_read)
         #print(nbytes)
         if verbose:
             print("raw data",sys.getsizeof(raw_data))
-        
         #(headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
         #    packetparser.findlongestcontinuous(raw_data, incr=512)
-
         
         (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
-            packetparser.findlongestcontinuous(raw_data, incr=512, srcid = 142999584) # Added by AnV 02/01/2024  srcid=144703552
+            packetparser.findlongestcontinuous(raw_data, incr=512, srcid = 142999584) # Added by AnV 02/01/2024
 
         
         if verbose:
@@ -642,10 +659,16 @@ class readout(object):
         (consumed, alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
         if verbose:
             print(sys.getsizeof(consumed),sys.getsizeof(alldata))
-        print(alldata)
-        readout.alldata = alldata
+
         alldata_array = np.zeros(alldata.data.shape,dtype = 'complex')
         alldata_array = alldata.data['i']+1j*alldata.data['q']
+        if average:
+            (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
+                                packetparser.findlongestcontinuous(raw_data, incr=512, srcid = 149422176) #
+            (avearge_consumed, average_alldata) = packetparser.parsemany(raw_data, headeroffsets[0], payloadoffsets, verbose = verbose)
+            average_alldata_array = np.zeros(average_alldata.data.shape,dtype = 'complex')
+            average_alldata_array = average_alldata.data['i']+1j*average_alldata.data['q']
+            return alldata_array,average_alldata_array 
         if ttl:
             
             (headeroffsets, payloadoffsets, payloadlengths, seqnos) = \
@@ -658,33 +681,27 @@ class readout(object):
             ttl_value_list = [];
             ttl_time_list = []; 
             for i in range(0, ttldata.data.shape[0]):
-                if ttldata.data[i]['active'] == 2147483648:
-                    try:
-                        ttl_value_list.append(float(bin(ttldata.data[i]['value'][0])[33]))
-                        ttl_time_list.append(float(ttldata.data[i]['t'][0]))
-                    except:
-                        #print("Could not find ttl edges."); 
-                        pass
+                #if ttldata.data[i]['active'] == 2147483648 or ttldata.data[i]['active'] == 3221225472: # Do not use
+                ttl_value_list.append(float(bin(ttldata.data[i]['value'][0])[-1]))
+                ttl_time_list.append(float(ttldata.data[i]['t'][0])*10000/2560*pow(10,-9)-alldata.timestamp) 
                        
             if verbose:
                 print(sys.getsizeof(consumed),sys.getsizeof(alldata)) 
 
-            print("ttl time length= " + str(len(ttl_time_list)))
-            print("ttl value length = " + str(len(ttl_value_list)))
-            print("alldata array length = " + str(len(alldata_array.data)))
-                        
-            #print(ttldata)
-            
-            #ttl_array = ttldata#alldata.data['sync0'] # maybe syncbux
+
             ttl_value = np.asarray(ttl_value_list)
+            readout.ttl_value = ttl_value
             ttl_time = np.asarray(ttl_time_list)
-            #pass
+            ttl_time = ttl_time
+            readout.ttl_time = ttl_time
 
-            ttl_interp = interpolate.interp1d(ttl_time, ttl_value, kind='previous');
-            ttl_array = ttl_interp(np.linspace(ttl_time[0], ttl_time[-1], len(alldata_array.data)));
-
-            self.alldata_array = alldata_array
-            self.ttl_array = ttl_array
+            ttl_interp = interpolate.interp1d(ttl_time, ttl_value, kind='previous',bounds_error = False,fill_value = "extrapolate");
+            #ttl_array = ttl_interp(np.linspace(ttl_time[0], ttl_time[-1], len(alldata_array.data)));
+            ttl_array = ttl_interp(np.linspace(0,alldata.data.shape[0]/self.data_rate,alldata.data.shape[0]))
+            
+            # Testing 
+            #self.alldata_array = alldata_array
+            #self.ttl_array = ttl_array
             
             return alldata_array, ttl_array
         if verbose:
@@ -844,7 +861,7 @@ class readout(object):
         output_attenutaion should be set to a single value that is good is at 
         halfway between max and min attenuation
         '''
-        n_attn_levels = np.int((max_attenuation-min_attenuation)/attenuation_step)+1
+        n_attn_levels = int((max_attenuation-min_attenuation)/attenuation_step)+1
         attn_levels = np.linspace(max_attenuation,min_attenuation,n_attn_levels)
         n_res = len(self.chanlist)
         self.power_sweep_iq_data = np.zeros((npts,n_res,n_attn_levels),dtype = 'complex')
@@ -898,7 +915,7 @@ class readout(object):
         do iq sweeps at different power levels to find bifurcation power levels                             
         halfway between max and min attenuation                                           
         '''
-        n_attn_levels = np.int((max_attenuation-min_attenuation)/attenuation_step)+1
+        n_attn_levels = int((max_attenuation-min_attenuation)/attenuation_step)+1
         attn_levels = np.linspace(max_attenuation,min_attenuation,n_attn_levels)
         voltage_scale = 10**(-attn_levels/20)
         n_res = len(self.chanlist)
@@ -1003,7 +1020,7 @@ class readout(object):
     def fit_power_sweep(self):
         if self.power_sweep_iq_data is not None:
             self.power_sweep_iq_fits = np.zeros((self.power_sweep_iq_data.shape[1],self.power_sweep_iq_data.shape[2],9))
-            self.power_sweep_fit_iq_data = np.zeros(self.power_sweep_iq_data.shape,dtype=np.complex)
+            self.power_sweep_fit_iq_data = np.zeros(self.power_sweep_iq_data.shape,dtype=complex)
             if self.res_class is not None:
                 center_freqs = []
                 for resonator in self.res_class.resonators:
