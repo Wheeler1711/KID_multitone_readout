@@ -27,7 +27,8 @@ readout.input_attenuator.set_attenuation(10)
 readout.iq_sweep()
 readout.retune_resonators(find_min = True)
 readout.iq_sweep()
-readout.power_sweep(20,0,2,span = 200e3,npts = 201)
+readout.power_sweep(20,0,2,span = 200e3,npts = 201) # This does not work if input attenuator is not used 
+readout.dac_power_sweep(20, 0, 2) # Directly scaling the FPGA generated waveform # Use this, input and output powers should match to obtain the best S21
 readout.fit_power_sweep()
 readout.tune_powers()
 ```
@@ -121,15 +122,20 @@ polcal_sweeper = polcal.PolcalSteppedSweep(readout,fine_span = 300e3,angle_deg_l
 # Do not change this directory name afterwards, calibration routine may break 
 ```
 
+If you want to only move the polarizer, for example 30 degrees
+```
+polcal_sweeper.grid_motor.move_absolute(30, wait = True) 
+```
+
 # Polcal - rotation and XY mapping 
 The alignment of the source is very important! Please set home_xy =True to make sure you don't loose the coordinates. 
 ```
 from detchar import polcal_mkid as polcal
 xy_list = polcal.make_xy_list(340, 350, 11, 5) # (x_center (mm), y_center (mm), npts, step (mm))
 grid_angle = 0; # Set the polarization angle (deg)
-polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_perids = 50, wait_s = 3) # Default wait_s = 0.1 seconds which is too fast
+polcal_sweeper = polcal.BeamMapSingleGridAngle(readout, xy_list, grid_angle, filename_suffix = "_xy_0deg_5mm_step", home_xy = True, num_lockin_periods = 50, wait_s = 1) # Default wait_s = 0.1 seconds
 # Do not change this directory name afterwards, calibration routine may break 
-polcal_sweeper.acquire(downsampling=250) # Downsampling isa new feature
+polcal_sweeper.acquire(downsampling=250) # Downsampling is a new feature
 ```
 If you want to move the xy-stage in absolute coordinates (mm) referenced to "home" (0, 0)
 ```
@@ -151,6 +157,7 @@ pktsrcsel.py udp://10.0.15.11 timestamp=ENABLED                    # Enables tim
 eidtest.py --ctrl=udp://10.0.15.11 -d | grep -e riseen -e fallen   # Gives the IDs for fallng and rising edge trigger signals
 # fallen = 2147483648
 # riseen = 3221225472
+regrw.py udp://10.0.15.11 0x06000038=0xffffffff 0x0600003c=0xffffffff
 ```
 
 # Reset rfsoc in linux (for example after power outage) 
@@ -172,15 +179,19 @@ ifconfig eno2:1 192.168.30.21/24 up    # Connect XY stage via Ethernet
 ping 192.168.30.100                    # Check connection
 
 busybox telnet 192.168.0.231           # Remote connect to power connectors
-pset 5 1
+ps 1                                   # Set all ports to 1 or 0 (ON or OFF)
+pset 5 1                               # Set one port to 1 or 0
 pset 6 1
 pset 17 1                              # etc.
 logout
+# More commands can be found in: 
+# https://static1.squarespace.com/static/54d27fb4e4b024eccdd9e569/t/6259cbade66b71218d8284ed/1650052014555/1094_NPStartup_V14.pdf
+
 
 ```
 # Remote view of Linux using RealVNC Viewer (Windows Powershell)
 ```
-vncserver -geometry 1600x1000 :3
+vncserver -geometry 1800x1000 :3
 ```
 
 
@@ -216,8 +227,19 @@ df -h /tmp/
 rm -vi /tmp/folder_name.zip 
 ```
 
+# Mount external hard drive
+```
+df -h           # Lists mounted devices 
+sudo fdisk -l   # Lists entries to the disks 
+
+# Be sure you found the correct path to the correct hard drive, then:
+sudo mount /dev/sdc1 /media/mybook25ED
+df -h          # Lists mounted devices
+```
+
 # Useful general commands 
 ```
+lsusb                        # lists all USB devices 
 df -T                        # shows available and used memory, FPGA output 250 kS/s, so space can run out
 nmcli device show            # lists all devices connected
 df /                         # returns the recycling bin location, in our case ~./dev/nvme0n1p2
