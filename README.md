@@ -239,7 +239,7 @@ df -h          # Lists mounted devices
 
 # Unmount the external hard drive
 ```
-sudo umount /dev/sdc1
+sudo umount /media/mybook25ED
 ```
 
 # Useful general commands 
